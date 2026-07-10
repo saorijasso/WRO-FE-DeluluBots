@@ -9,6 +9,13 @@ from calibration.calibration_panel import CalibrationPanel
 class ColorCalibrator:
 
     def __init__(self):
+        """
+        Initializes all components required for the color calibration tool.
+
+        Creates the camera stream, the HSV trackbars, the color manager
+        and the calibration panel. It also configures the mouse callback
+        used to interact with the interface.
+        """
 
         self.camera = Camera()
 
@@ -24,6 +31,17 @@ class ColorCalibrator:
         cv2.setMouseCallback("Controls", ColorCalibrator.mouse, (self.ui, self))
 
     def run(self):
+        """
+        Starts the calibration loop.
+
+        Continuously reads frames from the camera, updates the HSV mask
+        using the current trackbar values and displays the calibration
+        interface.
+
+        The selected color range is updated in real time.
+
+        Press ESC to exit.
+        """
 
         while True:
 
@@ -37,7 +55,7 @@ class ColorCalibrator:
             if self.current_selected_color:
                 self.manager.color_ranges[self.current_selected_color] = [low, high]
 
-            mask = VisionUtils.hsv_mask(frame, low, high)
+            mask = VisionUtils.hsv_binary_mask(frame, low, high)
 
             resized = VisionUtils.resize(mask, 700, 350)
 
@@ -51,12 +69,33 @@ class ColorCalibrator:
         cv2.destroyAllWindows()
 
     def stop(self):
+        """
+        Releases all resources and closes the application.
+
+        Stops the camera stream, destroys all OpenCV windows
+        and exits the program.
+        """
+
         self.camera.release()
         cv2.destroyAllWindows()
         exit()
 
     @staticmethod
     def mouse(event, x, y, flags, param):
+        """
+        Handles mouse events on the calibration panel.
+
+        Detects clicks on the interface buttons and delegates
+        the corresponding action to the calibrator.
+
+        Args:
+            event (int): OpenCV mouse event.
+            x (int): Horizontal cursor position.
+            y (int): Vertical cursor position.
+            flags (int): Additional event flags.
+            param (tuple): Tuple containing the calibration panel
+                and the calibrator instance.
+        """
 
         if event == cv2.EVENT_LBUTTONDOWN:
 
@@ -65,12 +104,26 @@ class ColorCalibrator:
             clicked = panel.get_clicked_button(x, y)
 
             if clicked:
+                #Execute the action associated with the clicked button
                 calibrator.handle_button(clicked)
 
     def handle_button(self, name):
+        """
+        Processes the action associated with the clicked button.
+
+        Depending on the selected button, the method can:
+
+        - Load the HSV values of a color.
+        - Reset the trackbars.
+        - Save the current calibration and exit.
+
+        Args:
+            name (str): Name of the clicked button.
+        """
 
         if name in self.manager.color_ranges:
 
+            #Load the saved HSV values into the trackbars
             self.current_selected_color = name
             low, high = self.manager.color_ranges[name]
             for i, (hsvname, val_low, val_high) in enumerate(zip(["H","S","V"], low, high)):
@@ -82,7 +135,9 @@ class ColorCalibrator:
             self.reset_trackbars()
 
         elif name == "Save & Quit":
+            #Save the current values before closing the application
             if self.current_selected_color:
+                #Update the HSV range of the selected color
                 low, high = self.trackbar.get_values()
                 self.manager.color_ranges[self.current_selected_color] = [low, high]
             

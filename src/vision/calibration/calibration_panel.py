@@ -4,6 +4,13 @@ import numpy as np
 class CalibrationPanel:
 
     def __init__(self):
+        """
+        Initializes the calibration panel.
+
+        Defines the background color, button colors, dimensions and
+        spacing of the interface elements. It also computes the button
+        positions and generates the panel image.
+        """
 
         self.bg_color = (240, 240, 240)
 
@@ -32,6 +39,16 @@ class CalibrationPanel:
         self.panel_img = self._draw_panel()
 
     def _compute_positions(self):
+        """
+        Computes the position of each button in the panel.
+
+        The color buttons are arranged in two columns, while the
+        control buttons are placed at the bottom.
+
+        Returns:
+            dict: Dictionary that maps each button name to its
+                corresponding (x, y) position.
+        """
 
         positions = {}
 
@@ -47,6 +64,7 @@ class CalibrationPanel:
 
         bottom_y = self.start_y + 3 * (self.button_h + self.gap_y) + 10
 
+        #Add the control buttons below the color buttons
         positions["Reset"] = (self.start_x, bottom_y)
 
         positions["Save & Quit"] = (
@@ -57,6 +75,20 @@ class CalibrationPanel:
         return positions
     
     def _round_button(self, img, x, y, w, h, color):
+        """
+        Draws a rounded rectangle button.
+
+        The button is built using rectangles and circles to simulate
+        rounded corners.
+
+        Args:
+            img (numpy.ndarray): Image where the button will be drawn.
+            x (int): Left position of the button.
+            y (int): Top position of the button.
+            w (int): Button width.
+            h (int): Button height.
+            color (tuple): Button color in BGR format.
+        """
 
         radius = 15
 
@@ -69,6 +101,15 @@ class CalibrationPanel:
         cv2.circle(img, (x+w-radius, y+h-radius), radius, color, -1)
 
     def _draw_panel(self):
+        """
+        Draws the complete calibration panel.
+
+        Creates the background image, draws all buttons and centers
+        their labels.
+
+        Returns:
+            numpy.ndarray: Generated panel image.
+        """
 
         img = np.full((420, 520, 3), self.bg_color, dtype=np.uint8)
 
@@ -107,6 +148,17 @@ class CalibrationPanel:
         return img
     
     def get_clicked_button(self, x, y):
+        """
+        Determines which button was clicked.
+
+        Args:
+            x (int): Horizontal mouse position.
+            y (int): Vertical mouse position.
+
+        Returns:
+            str: Name of the clicked button, or None if no button
+                was selected.
+        """
 
         for name, (bx, by) in self.positions.items():
 
@@ -119,4 +171,11 @@ class CalibrationPanel:
         return None
     
     def get_image(self):
+        """
+        Returns the calibration panel image.
+
+        Returns:
+            numpy.ndarray: Calibration panel.
+        """
+
         return self.panel_img
