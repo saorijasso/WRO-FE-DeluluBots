@@ -251,24 +251,34 @@ class VisionUtils:
             return "Red", best_red, red_mask
            
     @staticmethod
-    def draw_pillar(frame, contour, color):
+    def draw_element(frame, contour, color):
         """
-        Draws a bounding box and label around the detected pillar.
+        Draws a bounding box and label around the detected element.
 
         Args:
             frame (numpy.ndarray): Original frame.
-            contour (numpy.ndarray): Pillar contour.
-            color (str): Pillar color ("Red" or "Green").
+            contour (numpy.ndarray): Element contour.
+            color (str): Element color ("Red" or "Green").
 
         Returns:
-            numpy.ndarray: Frame with the pillar annotation.
+            numpy.ndarray: Frame with the element annotation.
         """
 
         if contour is None:
             return frame
         
         x, y, w, h = cv2.boundingRect(contour)
-        bgr = (0, 255, 0) if color == "Green" else (0, 0, 255)
+        match color:
+            case "Green":
+                bgr = (0, 255, 0)
+            case "Red":
+                bgr = (0, 0, 255)
+            case "Pink":
+                bgr = (255, 0, 255)
+            case "Blue":
+                bgr = (255, 0, 0)
+            case "Orange":
+                bgr = (0, 165, 255)
         cv2.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
         cv2.putText(frame, color, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bgr, 2)
         

@@ -63,7 +63,7 @@ class ImageManager:
         )
 
         result = frame.copy()
-        result = VisionUtils.draw_pillar(result, contour, color)
+        result = VisionUtils.draw_element(result, contour, color)
 
         return color, result, mask
 
