@@ -44,67 +44,69 @@ class ImageManager:
 
         return image
 
-    def process_pillars(self, frame):
+    def process_elements(self, frame, colors, min_area, method):
         """
-        Detects the closest pillar and draws its bounding box.
+        Detects and processes a group of elements.
+
+        The method detects the specified colors, selects one element
+        using the provided selection method and draws its bounding box.
 
         Args:
-            frame (numpy.ndarray): Original frame.
+            frame (numpy.ndarray): Original frame in BGR format.
+            colors (list[str]): Colors to detect.
+            min_area (int): Minimum contour area required for an element
+                to be considered valid.
+            method (callable): Function used to select the target element
+                from the detected elements.
 
         Returns:
             tuple: A tuple containing:
 
-                - str: Pillar color.
-                - numpy.ndarray: Frame with the pillar drawn.
-                - numpy.ndarray: Pillar mask.
+                - str: Selected element color.
+                - numpy.ndarray: Frame with the selected element drawn.
+                - numpy.ndarray: Binary mask of the selected element.
 
-            Returns (None, None, None) if no pillar is detected.
+            Returns (None, None, None) if no element is detected.
         """
 
-        MIN_AREA = 500
         elements = []
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        red = VisionUtils.detect_element(hsv, saved_ranges.color_ranges, "Red", MIN_AREA)
-        if red is not None:
-            elements.append(red)
+        element1 = VisionUtils.detect_element(hsv, saved_ranges.color_ranges, colors[0], min_area)
+        if element1 is not None:
+            elements.append(element1)
 
-        green = VisionUtils.detect_element(hsv, saved_ranges.color_ranges, "Green", MIN_AREA)
-        if green is not None:
-            elements.append(green)
+        element2 = VisionUtils.detect_element(hsv, saved_ranges.color_ranges, colors[1], min_area)
+        if element2 is not None:
+            elements.append(element2)
         
         if len(elements) == 0:
             return None, None, None
 
-        best_pillar = VisionUtils.select_target_pillar(elements)
+        best_element = method(elements)
 
         result = frame.copy()
-        result = VisionUtils.draw_element(best_pillar, result)
+        result = VisionUtils.draw_element(best_element, result)
         result = VisionUtils.resize(result, 700, 350)
 
-        mask = VisionUtils.resize(best_pillar["mask"], 700, 350)
+        mask = VisionUtils.resize(best_element["mask"], 700, 350)
 
-        return best_pillar["color"], result, mask
+        return best_element["color"], result, mask
 
-    def show_results(self, walls, pillars, mask):
+    def show_results(self, images):
         """
         Displays all processing windows.
 
         Args:
-            walls (numpy.ndarray): Wall detection result.
-            pillars (numpy.ndarray): Frame with pillar annotations.
-            mask (numpy.ndarray): Binary mask of the detected pillar.
+            images (dict): Dictionary where the key is the window name
+            and the value is the image to display.
 
         The method only displays windows for results that are available.
         """
-        if walls is not None:
-            cv2.imshow("Walls", walls)
-        
-        if pillars is not None:
-            cv2.imshow("Pillars", pillars)
 
-        if mask is not None:
-            cv2.imshow("Mask", mask)
+        for name, image in images.items():
+            if image is not None:
+                cv2.imshow(name, image)
 
     def run_test_from_image(self, path):
         """
@@ -122,11 +124,19 @@ class ImageManager:
 
         walls = self.process_walls(frame)
 
-        color, pillars, mask = self.process_pillars(frame)
+        pillars_color, pillars, pillar_mask = self.process_elements(frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar)
+        line_color, line, line_mask = self.process_elements(frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line)
 
-        self.show_results(walls, pillars, mask)
+        self.show_results({
+            "Walls": walls,
+            "Pillars": pillars,
+            "Pillar Mask": pillar_mask,
+            "Lines": line,
+            "Line Mask": line_mask
+        })
 
-        print(color)
+        print("Pillar: " + str(pillars_color))
+        print("Line: " + str(line_color))
 
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -145,11 +155,19 @@ class ImageManager:
 
             walls = self.process_walls(frame)
 
-            color, pillars, mask = self.process_pillars(frame)
+            pillars_color, pillars, pillar_mask = self.process_elements(frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar)
+            line_color, line, line_mask = self.process_elements(frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line)
 
-            self.show_results(walls, pillars, mask)
+            self.show_results({
+                "Walls": walls,
+                "Pillars": pillars,
+                "Pillar Mask": pillar_mask,
+                "Lines": line,
+                "Line Mask": line_mask
+            })
 
-            print(color)
+            print("Pillar: " + str(pillars_color))
+            print("Line: " + str(line_color))
 
             if cv2.waitKey(1) == 27:
                 break

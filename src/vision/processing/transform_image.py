@@ -284,6 +284,52 @@ class VisionUtils:
                 return elements[0]
             else:
                 return elements[1]
+            
+    @staticmethod
+    def select_target_line(elements):
+        """
+        Selects the line that will be used to determine the robot's
+        initial orientation.
+
+        The method compares the detected lines and determines which one
+        is closer to the camera. The vertical position is used as the
+        main criterion, while the contour area is used to break ties.
+
+        Args:
+            elements (list): List containing the detected lines.
+
+        Returns:
+            dict: Dictionary containing the selected line information.
+
+            Returns None if no line is detected.
+        """
+
+        BOTTOM_THRESHOLD = 0.10 #Maximum relative area difference to use vertical position as a tie breaker
+
+        if len(elements) == 0:
+            return None
+
+        if len(elements) == 1:
+            return elements[0]
+
+        bottom1 = elements[0]["y"] + elements[0]["h"]
+        bottom2 = elements[1]["y"] + elements[1]["h"]
+
+        difference = abs(bottom1 - bottom2) / max(bottom1, bottom2)
+
+        if difference < BOTTOM_THRESHOLD:
+            area1 = elements[0]["area"]
+            area2 = elements[1]["area"]
+
+            if area1 > area2:
+                return elements[0]
+            else:
+                return elements[1]
+        else:
+            if bottom1 > bottom2:
+                return elements[0]
+            else:
+                return elements[1]
            
     @staticmethod
     def draw_element(element, frame):
