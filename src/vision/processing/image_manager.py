@@ -32,7 +32,7 @@ class ImageManager:
         image = VisionUtils.replace_color(
             frame,
             saved_ranges.color_ranges,
-            ["Red", "Green", "Blue", "Orange"]
+            ["Red", "Green"]
         )
 
         image = VisionUtils.resize(image, 700, 350)
@@ -40,8 +40,9 @@ class ImageManager:
         image = VisionUtils.blur(image)
         image = VisionUtils.binary(image)
         image = VisionUtils.clean_binary(image)
+        image = VisionUtils.keep_largest_white(image)
 
-        return VisionUtils.keep_largest_white(image)
+        return image
 
     def process_pillars(self, frame):
         """
@@ -51,21 +52,39 @@ class ImageManager:
             frame (numpy.ndarray): Original frame.
 
         Returns:
-            tuple:
+            tuple: A tuple containing:
+
                 - str: Pillar color.
                 - numpy.ndarray: Frame with the pillar drawn.
                 - numpy.ndarray: Pillar mask.
+
+            Returns (None, None, None) if no pillar is detected.
         """
 
-        color, contour, mask = VisionUtils.find_closest_pillar(
-            frame,
-            saved_ranges.color_ranges
-        )
+        MIN_AREA = 500
+        elements = []
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        red = VisionUtils.detect_element(hsv, saved_ranges.color_ranges, "Red", MIN_AREA)
+        if red is not None:
+            elements.append(red)
+
+        green = VisionUtils.detect_element(hsv, saved_ranges.color_ranges, "Green", MIN_AREA)
+        if green is not None:
+            elements.append(green)
+        
+        if len(elements) == 0:
+            return None, None, None
+
+        best_pillar = VisionUtils.select_target_pillar(elements)
 
         result = frame.copy()
-        result = VisionUtils.draw_element(result, contour, color)
+        result = VisionUtils.draw_element(best_pillar, result)
+        result = VisionUtils.resize(result, 700, 350)
 
-        return color, result, mask
+        mask = VisionUtils.resize(best_pillar["mask"], 700, 350)
+
+        return best_pillar["color"], result, mask
 
     def show_results(self, walls, pillars, mask):
         """
@@ -74,11 +93,15 @@ class ImageManager:
         Args:
             walls (numpy.ndarray): Wall detection result.
             pillars (numpy.ndarray): Frame with pillar annotations.
-            mask (numpy.ndarray): Pillar mask.
-        """
+            mask (numpy.ndarray): Binary mask of the detected pillar.
 
-        cv2.imshow("Walls", walls)
-        cv2.imshow("Pillars", pillars)
+        The method only displays windows for results that are available.
+        """
+        if walls is not None:
+            cv2.imshow("Walls", walls)
+        
+        if pillars is not None:
+            cv2.imshow("Pillars", pillars)
 
         if mask is not None:
             cv2.imshow("Mask", mask)

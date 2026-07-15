@@ -174,100 +174,136 @@ class VisionUtils:
         return result
     
     @staticmethod
-    def color_mask(frame, color_ranges, color):
+    def detect_element(frame, color_ranges, color, min_area):
         """
-        Creates a mask for a specific color.
+        Detects an element of a given color and returns its information.
 
         Args:
             frame (numpy.ndarray): Image in HSV format.
             color_ranges (dict): Dictionary containing HSV ranges.
             color (str): Color to detect.
+            min_area (int): Minimum contour area.
 
         Returns:
-            numpy.ndarray: Binary mask of the selected color, or None
-                if the color is not found.
+            dict: Dictionary containing:
+
+                - color (str): Detected color.
+                - contour (numpy.ndarray): Largest valid contour.
+                - mask (numpy.ndarray): Binary mask.
+                - area (float): Contour area.
+                - x (int): X-coordinate (horizontal) of the top-left corner.
+                - y (int): Y-coordinate (vertical) of the top-left corner.
+                - w (int): Total width of the bounding box.
+                - h (int): Total height of the bounding box.
+
+            Returns None if no valid element is found.
         """
 
         if color not in color_ranges:
             return None
         
         low, high = color_ranges[color]
-        return cv2.inRange(frame, np.array(low), np.array(high))
-    
-    @staticmethod
-    def find_closest_pillar(frame, color_ranges):
-        """
-        Detects the closest pillar between the red and green pillars.
-
-        The method filters both colors, removes noise and compares the
-        contour areas to determine which pillar is closest to the camera.
-
-        Args:
-            frame (numpy.ndarray): Original frame in BGR format.
-            color_ranges (dict): Dictionary containing HSV color ranges.
-
-        Returns:
-            tuple: A tuple containing:
-
-                - str: Detected pillar color ("Red" or "Green").
-                - numpy.ndarray: Largest contour found.
-                - numpy.ndarray: Binary mask of the detected pillar.
-
-            Returns (None, None, None) if no pillar is detected.
-        """
-
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-        red_mask = VisionUtils.color_mask(hsv, color_ranges, "Red")
-        green_mask = VisionUtils.color_mask(hsv, color_ranges, "Green")
+        mask = cv2.inRange(frame, np.array(low), np.array(high))
 
         kernel = np.ones((5, 5), np.uint8)
-        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
-        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
-        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
-        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
-        combined_mask = cv2.bitwise_or(green_mask, red_mask)
 
-        green_contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        MIN_PILLAR_AREA = 500 #Modify depending on your camera's image size
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        valid_contours = []
 
-        green_contours = [c for c in green_contours if cv2.contourArea(c) >= MIN_PILLAR_AREA]
-        red_contours = [c for c in red_contours if cv2.contourArea(c) >= MIN_PILLAR_AREA]
+        for contour in contours:
 
-        best_green = max(green_contours, key=cv2.contourArea) if green_contours else None
-        best_red = max(red_contours, key=cv2.contourArea) if red_contours else None
+            area = cv2.contourArea(contour)
 
-        green_area = cv2.contourArea(best_green) if best_green is not None else 0
-        red_area = cv2.contourArea(best_red) if best_red is not None else 0
+            if area >= min_area:
+                valid_contours.append(contour)
 
-        if green_area == 0 and red_area == 0:
-            return None, None, None 
+        if len(valid_contours) == 0:
+            return None
 
-        if green_area > red_area:
-            return "Green", best_green, green_mask
+        best_contour = max(valid_contours, key=cv2.contourArea)
+        best_area = cv2.contourArea(best_contour)
+
+        x, y, w, h = cv2.boundingRect(best_contour)
+
+        return {
+            "color": color,
+            "contour": best_contour,
+            "mask": mask,
+            "area": best_area,
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h
+        }
+    
+    @staticmethod
+    def select_target_pillar(elements):
+        """
+        Selects the pillar that should be used as the target.
+
+        The method compares the detected red and green pillars to determine
+        which one is closer to the camera. If both pillars have similar
+        areas, the pillar located lower in the image is selected.
+
+        Args:
+            elements (list): List containing the detected pillars.
+
+        Returns:
+            dict: Dictionary containing the selected pillar information.
+
+            Returns None if no pillar is detected.
+        """
+
+        AREA_THRESHOLD = 0.15 #Maximum relative area difference to use vertical position as a tie breaker
+
+        if len(elements) == 0:
+            return None
+
+        if len(elements) == 1:
+            return elements[0]
+
+        area1 = elements[0]["area"]
+        area2 = elements[1]["area"]
+
+        difference = abs(area1 - area2) / max(area1, area2)
+
+        if difference < AREA_THRESHOLD:
+            bottom1 = elements[0]["y"] + elements[0]["h"]
+            bottom2 = elements[1]["y"] + elements[1]["h"]
+
+            if bottom1 > bottom2:
+                return elements[0]
+            else:
+                return elements[1]
         else:
-            return "Red", best_red, red_mask
+            if area1 > area2:
+                return elements[0]
+            else:
+                return elements[1]
            
     @staticmethod
-    def draw_element(frame, contour, color):
+    def draw_element(element, frame):
         """
         Draws a bounding box and label around the detected element.
 
         Args:
+            element (dict): Dictionary containing the detected element information.
             frame (numpy.ndarray): Original frame.
-            contour (numpy.ndarray): Element contour.
-            color (str): Element color ("Red" or "Green").
 
         Returns:
             numpy.ndarray: Frame with the element annotation.
         """
 
-        if contour is None:
+        if element is None:
             return frame
         
-        x, y, w, h = cv2.boundingRect(contour)
+        x, y, w, h = element["x"], element["y"], element["w"], element["h"]
+        color = element["color"]
+
         match color:
             case "Green":
                 bgr = (0, 255, 0)
@@ -279,6 +315,9 @@ class VisionUtils:
                 bgr = (255, 0, 0)
             case "Orange":
                 bgr = (0, 165, 255)
+            case _:
+                bgr = (255, 255, 255)
+
         cv2.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
         cv2.putText(frame, color, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bgr, 2)
         

@@ -12,3 +12,7 @@ venv/
 #Operating system files
 .DS_Store
 Thumbs.db
+
+#Images
+vision1.png
+vision2.png
