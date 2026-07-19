@@ -57,7 +57,7 @@ The system currently detects:
 
 ---
 
-## Element Detection
+## Detection
 
 The `process_elements()` method performs the detection process for signs and lines.
 
@@ -80,7 +80,7 @@ Each detected element stores:
 
 ---
 
-## Pillar Detection
+## Sign Detection
 
 Red and green signs are processed using:
 
@@ -93,7 +93,7 @@ The selected target is determined according to:
 1. Contour area.
 2. Vertical position.
 
-When both signs have similar areas, the pillar located lower in the image is considered closer to the robot.
+When both signs have similar areas, the sign located lower in the image is considered closer to the robot.
 
 ---
 

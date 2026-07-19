@@ -9,9 +9,8 @@ WRO 2026 Future Engineers - DeluluBots
     * 4.1. [Mobility Management](#41-mobility-management)
     * 4.2. [Power and Sense Management](#42-power-and-sense-management)
 5. [Software](5-software)
-    * 5.1. [Obstacle Management](#51-obstacle-management)
-    * 5.2. [Computer Vision](#52-computer-vision)
-    * 5.3. [Vehicle Control](#53-vehicle-control)
+    * 5.1. [Computer Vision](#51-computer-vision)
+    * 5.2. [Vehicle Control](#52-vehicle-control)
 6. [License](#6-license)
 
 ## 1. Team
@@ -31,9 +30,7 @@ WRO 2026 Future Engineers - DeluluBots
 ### 5.1. Computer Vision
 
 * [HSV calibration](src/vision/calibration/README.md)
-* Pillar detection
-* Line detection
-* Parking zone detection
+* [Element detection](src/vision/processing/README.md)
 
 ### 5.2. Vehicle Control
 
