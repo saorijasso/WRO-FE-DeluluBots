@@ -19,6 +19,7 @@ class LapPhase(Enum):
     WAITING_FIRST = auto()
     WAITING_SECOND = auto()
     DEBOUNCE = auto()
+    FINISHED = auto()
 
 
 # Maps each direction to the order in which the lines are expected to be
@@ -106,7 +107,7 @@ class LapTracker:
         """
 
         self.phase = LapPhase.WAITING_FIRST
-        self.current_lap = 1
+        self.current_lap = 0
         self.corners = 0
         self._debounce_until = 0.0
 
@@ -138,6 +139,9 @@ class LapTracker:
             detected_line_color (str): Detected line color ("Blue", "Orange",
                 or None if no line was detected in this frame).
         """
+        
+        if self.phase is LapPhase.FINISHED:
+            return
 
         if detected_line_color is None or self.first_line is None:
             return
@@ -168,18 +172,19 @@ class LapTracker:
         self.corners += 1
         if self.corners % self.CORNERS_PER_LAP == 0:
             self.current_lap += 1
-        self._debounce_until = now + self.DEBOUNCE_SECONDS
-        self.phase = LapPhase.DEBOUNCE
+
+        if self.current_lap >= self.TOTAL_LAPS:
+            self.phase = LapPhase.FINISHED
+        else: 
+            self._debounce_until = now + self.DEBOUNCE_SECONDS
+            self.phase = LapPhase.DEBOUNCE
 
     @property
     def finished(self):
         """
         Indicates whether all laps have been completed.
-
-        Returns:
-            bool: True if current_lap has gone past TOTAL_LAPS.
         """
-
-        return self.current_lap > self.TOTAL_LAPS
+    
+        return self.phase is LapPhase.FINISHED
 
     

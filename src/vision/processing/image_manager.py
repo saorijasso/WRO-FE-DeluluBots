@@ -3,6 +3,8 @@ import cv2
 from camera.camera import Camera
 from config import saved_ranges
 from processing.transform_image import VisionUtils
+from processing.telemetry_display import TelemetryDisplay
+from navigation.direction_manager import NavigationManager, LapTracker       
 
 
 class ImageManager:
@@ -86,12 +88,29 @@ class ImageManager:
         best_element = method(elements)
 
         result = frame.copy()
-        result = VisionUtils.draw_element(best_element, result)
+        result = TelemetryDisplay.draw_element(best_element, result)
         result = VisionUtils.resize(result, 700, 350)
 
         mask = VisionUtils.resize(best_element["mask"], 700, 350)
 
         return best_element["color"], result, mask
+
+    def process_navigation(self, line_color, line, nav_manager, lap_tracker):
+        """
+        Handles the direction assignment logic, lap tracking updates, 
+        and telemetry HUD rendering.
+        """
+        if line_color and not nav_manager.direction:
+            nav_manager.line_direction(line_color)
+            lap_tracker.set_direction(nav_manager.direction)
+            
+        if line_color:
+            lap_tracker.update(line_color)
+
+        if line is not None:
+            line = TelemetryDisplay.draw_hud(line, lap_tracker, nav_manager)
+            
+        return line
 
     def show_results(self, images):
         """
@@ -145,18 +164,24 @@ class ImageManager:
         """
         Runs the processing pipeline using the camera stream.
         """
+        nav_manager = NavigationManager()
+        lap_tracker = LapTracker()
 
         while True:
-
             frame = self.camera.read()
-
             if frame is None:
                 break
 
             walls = self.process_walls(frame)
 
-            pillars_color, pillars, pillar_mask = self.process_elements(frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar)
-            line_color, line, line_mask = self.process_elements(frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line)
+            pillars_color, pillars, pillar_mask = self.process_elements(
+                frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
+            )
+            line_color, line, line_mask = self.process_elements(
+                frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
+            )
+
+            line = self.process_navigation(line_color, line, nav_manager, lap_tracker)
 
             self.show_results({
                 "Walls": walls,
@@ -166,10 +191,12 @@ class ImageManager:
                 "Line Mask": line_mask
             })
 
+            print(f"Corners: {lap_tracker.corners} | Phase: {lap_tracker.phase.name} | Dir: {nav_manager.direction}")
             print("Pillar: " + str(pillars_color))
             print("Line: " + str(line_color))
 
-            if cv2.waitKey(1) == 27:
+           
+            if cv2.waitKey(1) == 27: 
                 break
 
         self.camera.release()
