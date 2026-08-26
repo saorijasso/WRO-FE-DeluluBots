@@ -331,40 +331,4 @@ class VisionUtils:
             else:
                 return elements[1]
            
-    @staticmethod
-    def draw_element(element, frame):
-        """
-        Draws a bounding box and label around the detected element.
-
-        Args:
-            element (dict): Dictionary containing the detected element information.
-            frame (numpy.ndarray): Original frame.
-
-        Returns:
-            numpy.ndarray: Frame with the element annotation.
-        """
-
-        if element is None:
-            return frame
-        
-        x, y, w, h = element["x"], element["y"], element["w"], element["h"]
-        color = element["color"]
-
-        match color:
-            case "Green":
-                bgr = (0, 255, 0)
-            case "Red":
-                bgr = (0, 0, 255)
-            case "Pink":
-                bgr = (255, 0, 255)
-            case "Blue":
-                bgr = (255, 0, 0)
-            case "Orange":
-                bgr = (0, 165, 255)
-            case _:
-                bgr = (255, 255, 255)
-
-        cv2.rectangle(frame, (x, y), (x + w, y + h), bgr, 2)
-        cv2.putText(frame, color, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, bgr, 2)
-        
-        return frame
+    
