@@ -194,7 +194,454 @@ Take a look at our robot in action during the WRO 2026 Future Engineers challeng
 ### 4.1. Mobility Management
 
 ### 4.2. Power and Sense Management
+This section details the hardware architecture of our vehicle, covering **component selection and strategic placement**, **power distribution**, **wiring schematics (including custom PCB design)**, **sensor calibration protocols**, and **systematic power testing strategies**.
 
+Our design methodology goes beyond connecting components to achieve basic functionality. We engineered an electrical ecosystem focused on **reproducibility**, **safety**, **noise isolation**, and **rapid pre-competition validation**—ensuring every hardware decision directly supports our vehicle’s autonomous performance goals.
+
+> [!NOTE]
+> **Key Engineering Focus:** Prioritizing power stability through dual-battery domain isolation, noise decoupling, and custom PCB power distribution to withstand dynamic competition conditions.
+
+### Section Overview
+
+This module is organized into six core architecture deliverables:
+
+<table>
+  <thead>
+    <tr>
+      <th width="30%">Module</th>
+      <th width="70%">Key Deliverables & Specifications</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>01. Control Architecture</b></td>
+      <td>Dual-controller processing hierarchy (Raspberry Pi 5 + ESP32) and UART communication flow.</td>
+    </tr>
+    <tr>
+      <td><b>02. Power System Architecture</b></td>
+      <td>Dual-domain battery isolation (2500 mAh logic & 2300 mAh actuators), voltage regulation rails, and safety protocols.</td>
+    </tr>
+    <tr>
+      <td><b>03. Power Budget & Runtime</b></td>
+      <td>Worst-case current consumption matrix, mathematical power models, and battery life estimations.</td>
+    </tr>
+    <tr>
+      <td><b>04. Component Specifications</b></td>
+      <td>Comprehensive procurement matrix, hardware parameters, engineering rationale, and placement strategy.</td>
+    </tr>
+    <tr>
+      <td><b>05. Iterative Hardware Prototyping</b></td>
+      <td>Pre-PCB circuit mapping, hand-drawn schematics, and preliminary electrical testing.</td>
+    </tr>
+    <tr>
+      <td><b>06. Custom PCB Integration</b></td>
+      <td>Carrier board design, dual-switch power activation, decoupling strategies, and trace routing.</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+### Control Architecture
+
+The vehicle's electronics rely on a distributed processing hierarchy, separating high-level perception and computer vision from real-time low-level actuation:
+
+```text
+┌────────────────────────────────┐                 ┌────────────────────────────────┐
+│        Raspberry Pi 5          │   UART Serial   │              ESP32             │
+│  (High-Level Vision & Logic)   │ ──────────────> │  (Low-Level Real-Time Control) │
+└───────────────┬────────────────┘                 └───────────────┬────────────────┘
+                │                                                  │
+         USB    │                                   PWM / I2C / IO │
+                ▼                                                  ▼
+   ┌──────────────────────────┐                      ┌──────────────────────────┐
+   │    Logitech Brio 100     │                      │ Actuators & Sensors      │
+   │    (1080p Camera)        │                      │ (Motor, Servo, IMU)      │
+   └──────────────────────────┘                      └──────────────────────────┘
+```
+
+* **Raspberry Pi 5 (Vision & Logic):** Processes the camera feed using OpenCV to detect the track boundaries. It acts as the main decision-maker, calculating the necessary steering angle, motor power, and evaluating state conditions (e.g., boolean flags for lap counting or current run state). It sends these specific variables to the ESP32 via UART serial communication.
+* **ESP32 (Hardware Control):** Receives the angle, power, and state commands from the Raspberry Pi. It acts as the physical bridge: reading data from the BNO055 IMU and motor encoder, and translating the Pi's commands into actual PWM signals to drive the BTS7960 motor driver and steering servo.
+
+---
+
+### Electrical System Architecture
+
+<p align="center">
+  <img src="schemes/current_wiring_schematic.png" alt="Current Wiring Schematic" width="800">
+  <br>
+  <em>Official electrical schematic detailing power distribution and signal routing.</em>
+</p>
+
+#### Dual-Battery Domain Isolation
+
+To eliminate voltage dips (brownouts) and inductive noise caused by high-current motor actuation, the electrical system is divided into two fully isolated power domains:
+
+* **Logic & Perception Domain (7.4V LiPo, 2500 mAh 2S):** Powers low-voltage digital hardware, sensors, processing boards, and the USB camera.
+* **Actuator Domain (11.1V LiPo, 2300 mAh 3S):** Supplies raw current to mechanical loads, isolating inductive back-EMF and switching noise from sensitive processing logic.
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                        ACTUATOR POWER DOMAIN                           │
+└────────────────────────────────────────────────────────────────────────┘
+                       ┌──────────────────────┐
+                       │   11.1 V LiPo        │
+                       │   2300 mAh (3S)      │
+                       └──────────┬───────────┘
+                                  │
+                   ┌──────────────┴──────────────┐
+                   │                             │
+              Direct 11.1 V                 ┌────▼────┐
+                   │                        │ XL4015  │
+                   ▼                        │  6.5 V  │
+             ┌───────────┐                  └────┬────┘
+             │  BTS7960  │                       │
+             └─────┬─────┘                  ┌────┴─────┐
+                   │                        │ Hiwonder │
+                   ▼                        │ 20kg·cm  │
+              ┌─────────┐                   │  Servo   │
+              │ GM25    │                   └───────────┘
+              │ Motor   │
+              └─────────┘
+
+┌────────────────────────────────────────────────────────────────────────┐
+│                          LOGIC POWER DOMAIN                            │
+└────────────────────────────────────────────────────────────────────────┘
+                       ┌──────────────────────┐
+                       │   7.4 V LiPo         │
+                       │   2500 mAh (2S)      │
+                       └──────────┬───────────┘
+                                  │
+                             ┌────▼────┐
+                             │ XL4015  │
+                             │  5.0 V  │
+                             └────┬────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │                           │
+              ┌─────▼─────┐               ┌─────▼─────┐
+              │   ESP32   │               │ Raspberry │
+              └─────┬─────┘               │   Pi 5    │
+                    │                     └─────┬─────┘
+       ┌────────────┼────────────┐              │
+       │            │            │          USB │
+   ┌───▼────┐  ┌────▼───┐  ┌─────▼─────┐        ▼
+   │Encoder │  │ BNO055 │  │   UART    │  ┌───────────────┐
+   │        │  │  IMU   │  │ Interface │  │ Logitech Brio │
+   └────────┘  └────────┘  └───────────┘  │  100 Webcam   │
+                                          └───────────────┘
+```
+
+> [!IMPORTANT]
+> **Noise Suppression:** A 220 nF ceramic capacitor is placed in parallel across the servo power rail (+V/GND) to suppress high-frequency inductive voltage spikes generated by sudden mechanical steering shifts.
+
+#### Voltage Regulation & Pre-Power Safeguards
+
+Two XL4015 DC-DC Buck Converters step down variable battery voltages into regulated power rails:
+
+| **Input Source** | **Regulated Output** | **Target Payloads** | **Primary Purpose** |
+| --- | --- | --- | --- |
+| **7.4V LiPo (2S, 2500 mAh)** | **5.0V DC** | ESP32, Raspberry Pi 5, Sensors, Camera | Clean digital rail preventing MCU/SBC brownouts. |
+| **11.1V LiPo (3S, 2300 mAh)** | **6.5V DC** | Hiwonder 20 kg·cm Steering Servo | Dedicated high-torque servo rail isolated from logic. |
+
+> [!WARNING]
+> **Safety Protocol:** Buck converter output voltages are manually verified using a digital multimeter prior to connecting any microcontrollers, ensuring no over-voltage reaches 5V sensitive logic lines.
+>
+> | **Testing Logic Rail (5.0V)** | **Testing Actuator Rail (6.5V)** |
+> | :---: | :---: |
+> | <img src="hardware/multimeter_logic_rail.jpg" alt="Multimeter checking 5V buck converter" width="300"> | <img src="hardware/multimeter_servo_rail.jpg" alt="Multimeter checking 6.5V buck converter" width="300"> |
+---
+
+### Reliability and Safety Considerations
+
+#### Reverse Polarity Prevention
+
+One of the most critical foreseeable assembly failures during rapid pit-stop battery swaps is reverse polarity connection. To eliminate this risk, the power distribution system does not rely solely on color-coded wire conventions (red/black):
+
+* **Actuator Domain (11.1 V LiPo):** Terminates in a high-current **keyed XT60 connector**.
+* **Logic Domain (7.4 V LiPo):** Terminates in a dedicated **keyed JST-RC connector**.
+
+Because both connector families are mechanically polarized and asymmetrical, they physically prevent inverted insertion. This implements a reliable mistake-proofing (poka-yoke) physical safeguard, eliminating human error during high-stress competition maintenance.
+
+---
+
+### Current Requirements & Power Budget
+
+#### Component Current Demand Matrix
+
+| **Component** | **Operating Voltage** | **Current Demand / Profile** | **Supply Source** |
+| --- | --- | --- | --- |
+| **GM25-370 Motor** | 11.1 V | ≤ 1.7 A (Nominal) \| ≤ 5.6 A (Stall) | Direct 11.1V LiPo (3S, 2300 mAh) |
+| **BTS7960 Driver** | 11.1 V | Rated up to 43 A max peak | Direct 11.1V LiPo (3S, 2300 mAh) |
+| **Hiwonder Servo** | 6.5 V | Variable dynamic load (≈ 0.8 A – 2.0 A) | 11.1V LiPo → XL4015 Buck (#2) |
+| **Raspberry Pi 5** | 5.0 V | High-performance digital load (≈ 1.5 A – 3.0 A) | 7.4V LiPo → XL4015 Buck (#1) |
+| **ESP32 MCU** | 5.0 V | Nominal logic load (≈ 160 mA – 240 mA) | 7.4V LiPo → XL4015 Buck (#1) |
+| **BNO055 IMU** | 3.3 V Logic | Low power sensor load (< 15 mA) | ESP32 Onboard 3.3V Regulator |
+| **Logitech Brio 100** | 5.0 V (USB) | Powered directly via USB bus | Raspberry Pi 5 USB Port |
+
+#### Mathematical Power Calculations
+
+Electrical power consumption is defined by:
+
+**P = V × I**
+
+**1. Nominal Motor Power Consumption:**
+P(motor_nom) = 11.1 V × 1.7 A = 18.87 W
+
+**2. Worst-Case Stall Electrical Condition:**
+P(motor_stall) = 11.1 V × 5.6 A = 62.16 W
+
+*The stall power (62.16 W) represents an instantaneous transient condition used to dimension PCB trace widths and thermal clearance margins.*
+
+#### Battery Runtime Estimation
+
+Theoretical operational runtime (t) is estimated using nominal battery capacities:
+
+**t ≈ Capacity (Ah) / Average Current (A)**
+
+* **Actuator Rail (11.1V LiPo, 2300 mAh):**
+  Actuator Runtime ≈ 2.3 Ah / 1.7 A ≈ 1.35 hours (≈ 81 minutes)
+
+* **Logic Rail (7.4V LiPo, 2500 mAh):**
+  Logic Runtime ≈ 2.5 Ah / 2.0 A ≈ 1.25 hours (≈ 75 minutes)
+
+> **Real-World Operating Margin:** Accounting for ≈ 90% DC-DC buck efficiency, CPU vision spikes, and keeping battery discharge above 20% capacity (3.3V/cell cutoff), total continuous competition runtime is estimated at **45–55 minutes**, far exceeding the required competition run length.
+
+---
+
+### Component Selection & Specifications
+
+The following table details the key electronic and electromechanical components selected for our vehicle, including their core technical parameters, functional role, power/interface requirements, and engineering rationale.
+
+<table>
+  <thead>
+    <tr>
+      <th width="11%">Component</th>
+      <th width="8%">Image</th>
+      <th width="20%">Key Specifications</th>
+      <th width="16%">Function</th>
+      <th width="20%">Power / Interface</th>
+      <th width="25%">Selection Rationale</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>GM25-370 Geared Motor</b><br><i>(with encoder)</i></td>
+      <td align="center"><img src="other/components/gm25_motor.jpg" alt="GM25 Motor" width="70"></td>
+      <td>
+        • 12V Nominal<br>
+        • 330 RPM<br>
+        • Metal Gearbox<br>
+        • Integrated Encoder
+      </td>
+      <td>Drive Propulsion</td>
+      <td>11.1V Battery via BTS7960 Driver</td>
+      <td>Provides high torque and high encoder resolution for precise closed-loop speed control.</td>
+    </tr>
+    <tr>
+      <td><b>BTS7960 Motor Driver</b></td>
+      <td align="center"><img src="other/components/bts7960.png" alt="BTS7960 Driver" width="70"></td>
+      <td>
+        • Max Current: 43A<br>
+        • Operating Voltage: 6V–27V<br>
+        • Thermal Protection
+      </td>
+      <td>High-Current Motor Control</td>
+      <td>11.1V Power Rail + ESP32 Logic PWM/DIR</td>
+      <td>Offers high current headroom, preventing thermal shutdown during heavy load or acceleration.</td>
+    </tr>
+    <tr>
+      <td><b>Hiwonder Digital Servo</b></td>
+      <td align="center"><img src="other/components/hiwonder_servo.png" alt="Hiwonder Servo" width="70"></td>
+      <td>
+        • Torque: 20 kg·cm<br>
+        • Metal Gears<br>
+        • Fast Response
+      </td>
+      <td>Steering Actuation</td>
+      <td>6.5V Regulated Power Rail (PWM Control)</td>
+      <td>Metal gears and high torque ensure rigid steering alignment without mechanical backlash.</td>
+    </tr>
+    <tr>
+      <td><b>ESP32 Dev Board</b></td>
+      <td align="center"><img src="other/components/esp32.png" alt="ESP32 Board" width="70"></td>
+      <td>
+        • Dual-Core 240MHz<br>
+        • Wi-Fi / Bluetooth<br>
+        • Hardware PWM
+      </td>
+      <td>Low-Level Microcontroller</td>
+      <td>5V Regulated Logic Input (UART / I2C)</td>
+      <td>High processing speed for real-time encoder readings and PID motor loops.</td>
+    </tr>
+    <tr>
+      <td><b>BNO055 9-DOF IMU</b></td>
+      <td align="center"><img src="other/components/bno055.png" alt="BNO055 IMU" width="70"></td>
+      <td>
+        • Onboard Sensor Fusion<br>
+        • Absolute Orientation<br>
+        • Low Drift
+      </td>
+      <td>Orientation Feedback</td>
+      <td>ESP32 via I2C Bus</td>
+      <td>Built-in sensor fusion algorithm offloads IMU filtering from the main MCU.</td>
+    </tr>
+    <tr>
+      <td><b>Raspberry Pi 5</b></td>
+      <td align="center"><img src="other/components/rpi5.png" alt="Raspberry Pi 5" width="70"></td>
+      <td>
+        • Quad-Core ARM<br>
+        • 16GB RAM<br>
+        • USB 3.0
+      </td>
+      <td>High-Level Vision Processing</td>
+      <td>5V Regulated Logic Rail (USB/UART Interface)</td>
+      <td>Delivers high computational power and memory for real-time OpenCV image processing.</td>
+    </tr>
+    <tr>
+      <td><b>Logitech Brio 100</b></td>
+      <td align="center"><img src="other/components/brio100.png" alt="Logitech Brio 100" width="70"></td>
+      <td>
+        • 1080p Resolution<br>
+        • Wide FOV<br>
+        • Auto Light Balance
+      </td>
+      <td>Computer Vision Camera</td>
+      <td>USB Connection to Raspberry Pi 5</td>
+      <td>Provides high clarity and stable frame rates across varying ambient light conditions.</td>
+    </tr>
+    <tr>
+      <td><b>XL4015 Buck Converters</b></td>
+      <td align="center"><img src="other/components/xl4015.png" alt="XL4015 Buck Converter" width="70"></td>
+      <td>
+        • Max Output: 5A / 50W<br>
+        • Adjustable Step-Down<br>
+        • High Efficiency (>90%)
+      </td>
+      <td>Power Step-Down (Logic & Servo)</td>
+      <td>Battery → Regulated Rails</td>
+      <td>Drives logic circuits and servos efficiently with low heat dissipation.</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+### Strategic Component Placement (Physical Layout)
+
+Component placement bridges our electrical schematic with the mechanical reality of the chassis. Positioning was dictated by three core constraints: **signal integrity (minimizing wire length)**, **electromagnetic interference (EMI) reduction**, and **accessibility for quick pit-stop maintenance**.
+
+<p align="center">
+  <img src="hardware/pcb_mounted_on_robot.jpg" alt="Final PCB Integrated into Vehicle Chassis" width="800">
+  <br>
+  <em>Final logic PCB physically mounted on the vehicle chassis.</em>
+</p>
+
+| **Component** | **Physical Placement** | **Engineering Rationale** |
+| :--- | :--- | :--- |
+| **ESP32 & BNO055 IMU** | Centered directly on carrier PCB | Keeps I²C / signal traces extremely short to prevent noise. Rigid PCB mounting ensures the IMU reads true chassis kinematics without vibration anomalies. |
+| **BTS7960 Motor Driver** | Rear chassis, adjacent to motor | Keeps high-current motor wiring as short as possible, reducing voltage drop (I²R losses) and keeping inductive motor noise away from the logic boards. |
+| **XL4015 Regulators** | Segregated near battery inputs | Steps down voltage immediately at the source, reducing unnecessary runs of raw 11.1V/7.4V lines across the chassis. |
+| **Battery Connectors** | PCB outer edges | Ensures rapid, unobstructed access for battery hot-swapping between competition runs. |
+| **Servo Header** | Accessible PCB perimeter | Allows for quick steering actuator replacement without needing to disassemble or unmount the entire logic board. |
+| **Raspberry Pi 5** | Elevated deck, isolated from motors | Physically distances sensitive high-speed logic from motor EMI and provides better ambient airflow for CPU cooling. |
+
+#### Sensor Kinematics & Field Geometry
+
+Beyond electrical routing, sensor placement was strictly optimized to map the physical geometry of the WRO competition field accurately:
+
+* **Camera (Perception & FOV):** Positioned at the highest frontal point to maximize look-ahead detection distance while eliminating structural blind spots. Its final pitch angle was empirically calibrated on the physical track to mitigate harsh overhead lighting reflections, floor shadows, and horizon distortion.
+* **BNO055 IMU (Orientation):** Hard-mounted to perfectly align with the vehicle’s longitudinal axis. This precise orientation guarantees that yaw calculations reflect the chassis's true kinematic center without introducing angular offsets.
+* **Quadrature Encoder (Odometry):** Mechanically coupled directly to the drive motor shaft. This 1:1 rigid coupling ensures that wheel rotation is translated into precise linear distance data, minimizing errors caused by mechanical backlash.
+
+---
+
+### Iterative Design Process
+
+The final custom PCB was the result of a systematic iteration process. Before manufacturing the final board, the complete electrical system was assembled using temporary wire harnesses and tested directly on the physical robot chassis under dynamic loads. This allowed us to identify electrical bottlenecks and mechanical constraints before committing to a permanent copper layout.
+
+<p align="center">
+  <img src="schemes/hand_drawn_initial_schematic.jpg" alt="Hand-drawn Initial Schematic" width="45%">
+  &nbsp;&nbsp;
+  <img src="hardware/breadboard_prototype_assembly.jpg" alt="Breadboard Prototype Assembly" width="45%">
+  <br>
+  <em>Left: Initial hand-drawn circuit mapping. Right: Breadboard logic validation before PCB design.</em>
+</p>
+
+#### Evolution of the Electrical Schematic
+
+Our electrical mapping evolved to address noise constraints and incorporate dual battery isolation.
+
+<p align="center">
+  <img src="schemes/previous_wiring_schematic_v1.png" alt="Previous Wiring Schematic V1" width="45%">
+  &nbsp;&nbsp;
+  <img src="schemes/previous_wiring_schematic_v2.png" alt="Previous Wiring Schematic V2" width="45%">
+  <br>
+  <em>Earlier revisions of the system architecture (v1 and v2) during the prototyping phase.</em>
+</p>
+
+#### Hardware Iteration Matrix
+
+| **Observation / Issue** | **Design Change Implemented** | **Expected Improvement** |
+| :--- | :--- | :--- |
+| **Spaghetti Wiring:** Loose temporary wires made connections fragile and difficult to organize. | **Custom Carrier PCB:** Designed a dedicated two-layer printed circuit board. | Achieved highly organized, vibration-resistant, and reproducible wiring. |
+| **Brownouts:** Actuator loads (motors/servos) caused voltage drops affecting the Pi and ESP32. | **Dual-Domain Battery System:** Divided the system into two physically isolated battery domains. | Prevented MCU resets by physically decoupling logic from inductive loads. |
+| **Voltage Risks:** Buck regulators required precise manual adjustment via potentiometers. | **Pre-Power Validation Step:** Enforced manual multimeter checks of XL4015 outputs before IC insertion. | Eliminated the risk of frying 5V logic lines with accidental 11V inputs. |
+| **Human Error:** Standard pin headers allowed for accidental reverse polarity during battery swaps. | **Keyed Connectors:** Transitioned to XT60 and keyed JST connectors for power delivery. | Made it physically impossible to plug batteries in backward during the stress of competition. |
+| **Signal Routing:** Multiple loose signal jumper wires were difficult to manage and trace. | **Centralized JST Headers:** Grouped signal lines into dedicated JST-XH headers on the PCB. | Faster assembly, easier module replacement, and simplified troubleshooting. |
+
+---
+
+### Custom PCB Design & Integration
+
+The printed circuit board was engineered to transform the electrical ecosystem from a fragile prototype into a competition-ready, reproducible system. Rather than relying on independent wiring, the PCB acts as the central nervous system, providing dedicated power distribution planes, shielded signal traces, and secure component mounting.
+
+<p align="center">
+  <img src="hardware/prototype_pcb_design.png" alt="Prototype PCB Iteration" width="45%">
+  &nbsp;&nbsp;
+  <img src="hardware/final_pcb_3d_model.png" alt="Final PCB 3D Model" width="45%">
+  <br>
+  <em>Left: Initial prototype board layout. Right: Final competition-ready custom PCB 3D model.</em>
+</p>
+
+#### PCB Architecture Decisions
+
+| **Feature** | **Design Decision** | **Engineering Rationale** |
+| :--- | :--- | :--- |
+| **Structure** | Two-Layer PCB (FR4) | Provides adequate routing flexibility while keeping the board footprint compact. |
+| **Grounding** | Common Ground Plane (Polygon Pour) | Ensures a unified electrical reference for control/communication, reducing ground loops. |
+| **Power Distribution** | Dedicated Power Rails | Replaces unpredictable wire resistance with calculated copper paths, simplifying debugging. |
+| **Motor Driver** | External BTS7960 Module | Offloads extreme thermal dissipation (up to 43A) away from the main PCB logic. |
+| **ESP32 & IMU** | Direct PCB Surface Mounting | Minimizes I²C wire length for the BNO055, reducing noise and capacitance on the data lines. |
+| **Power Inputs** | KF301-2P Terminals | Provides robust, high-current mechanical clamping for raw battery inputs. |
+
+#### PCB Trace Width Optimization
+
+To guarantee electrical safety and prevent copper delamination under heavy loads, trace widths were dynamically calculated rather than uniformly applied. 
+
+Using standard **IPC-2221 design formulas**, we dimensioned the power traces based on expected temperature rise and current flow. Special attention was given to the actuator power paths: because the GM25 motor can hit a **stall current of up to 5.6 A**, those specific traces were significantly widened and reinforced with copper pours to ensure they can handle transient spikes without dangerous thermal buildup. Signal traces (like UART and I²C), which carry milliamperes, were kept thin to save routing space.
+
+---
+
+### Systematic Sensor Calibration Protocols
+
+Systematic sensor calibration is conducted before executing autonomous runs to verify that all sensor readings reliably represent the vehicle's true physical state on the competition field.
+
+| **Subsystem** | **Calibration Method** | **Validation Purpose** |
+| :--- | :--- | :--- |
+| **BNO055 IMU** | Stationary zero-bias initialization & axis verification | Establishes a true, drift-free angular heading reference. |
+| **Motor Encoder** | Ground-truth linear translation measurement | Validates wheel ticks-to-distance odometry scaling factors. |
+| **Logitech Brio Camera** | Visual pipeline tuning under ambient arena lighting | Maximizes detection accuracy, contrast, and color thresholding. |
+| **Steering Servo** | Commanded PWM pulse width vs. physical steering angle | Eliminates mechanical backlash and ensures centered tracking. |
+
+#### BNO055 Orientation Calibration
+During bootup, the vehicle remains completely stationary for three seconds. This permits the onboard sensor fusion co-processor to zero its internal rate gyros, compute accelerometer gravity vectors, and establish an absolute zero heading aligned with the track direction.
+
+#### Encoder Odometry Calibration
+Odometry scaling factors are verified by commanding the vehicle to travel an exact distance measured physically on the field. Encoder counts are recorded over multiple iterations to determine the real-world pulse-to-distance conversion ratio, compensating for slight wheel diameter variations and tire compression.
+
+#### Vision System & Environmental Lighting Calibration
+Vision calibration verifies camera pitch, Field of View (FOV), exposure, and HSV color thresholds directly on the practice mat. The camera exposure is manually locked to prevent auto-adjusting shutter speeds under fluctuating venue lighting, preventing false line detections from floor glare and shadows.
 ## 5. Software
 
 ### 5.1. Computer Vision
@@ -535,7 +982,7 @@ VisionUtils
 
 ## 6. DIY Game Field
 
-![Field Overview](v-photos/DIY_Field_Photos/field_overview.jpg)
+![Field Overview](other/DIY_Field_Photos/field_overview.jpg)
 
 To test our autonomous vehicle under conditions closer to the actual competition, we decided to build our own full-scale game field. Having a field available for regular testing allowed us to work on autonomous navigation, computer vision, obstacle detection, and parking. Our goal was to build a field that followed the main WRO specifications while keeping it affordable, reusable, and easy to modify between tests.
 
@@ -571,7 +1018,7 @@ The official field has an inner playing area of **3000 × 3000 mm**. We used a w
 
 #### 2. Exterior and Interior Walls
 
-![Exterior Walls Joints](v-photos/DIY_Field_Photos/exterior_walls.jpg)
+![Exterior Walls Joints](others/DIY_Field_Photos/exterior_walls.jpg)
 
 > **Material:** 3 mm MDF  
 > **Height:** 100 mm  
@@ -604,7 +1051,7 @@ Because the MDF is 3 mm thick, the short segments were reduced by **2 × 3 mm** 
 
 #### 3. Traffic Signs & Parking Delimiters
 
-![Pillars Construction](v-photos/DIY_Field_Photos/traffic_signs.jpg)
+![Pillars Construction](other/DIY_Field_Photos/traffic_signs.jpg)
 
 We used leftover 3 mm MDF from the wall construction to build both the traffic signs and parking delimiters as hollow structures. This reduced material usage while keeping the required external dimensions.
 
@@ -649,10 +1096,10 @@ The smaller markings and starting zones were measured and drawn manually using a
 
 ### Construction Process Gallery
 
-| ![Process 1](v-photos/DIY_Field_Photos/process_1.jpg) | ![Process 2](v-photos/DIY_Field_Photos/process_2.jpg) |
+| ![Process 1](other/DIY_Field_Photos/process_1.jpg) | ![Process 2](other/DIY_Field_Photos/process_2.jpg) |
 | :---: | :---: |
 | **1.** Cutting MDF strips and assembling the exterior wall joints. | **2.** Preparing the modular interior wall segments. |
-| ![Process 3](v-photos/DIY_Field_Photos/process_3.jpg) | ![Process 4](v-photos/DIY_Field_Photos/process_4.jpg) |
+| ![Process 3](other/DIY_Field_Photos/process_3.jpg) | ![Process 4](other/DIY_Field_Photos/process_4.jpg) |
 | **3.** Building and painting the traffic signs and parking delimiters. | **4.** Measuring and applying the field lines and markings. |
 
 The finished field became part of our regular testing setup, giving us a consistent environment to test changes to the robot and compare their results.
