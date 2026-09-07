@@ -148,6 +148,47 @@ I also helped the team stay focused on our goals, encouraged us to keep improvin
 
 ## 3. Our Robot
 
+### Performance Videos
+
+Take a look at our robot in action during the WRO 2026 Future Engineers challenges.
+
+<table>
+<tr>
+<td align="center" width="50%">
+
+<strong>Open Challenge</strong>
+
+<a href="https://www.youtube.com/watch?v=468RyVULAOA">
+  <img src="https://img.youtube.com/vi/468RyVULAOA/maxresdefault.jpg" width="400">
+</a>
+
+<br>
+
+<a href="https://www.youtube.com/watch?v=468RyVULAOA">
+  Watch the Open Challenge Video
+</a>
+
+</td>
+
+<td align="center" width="50%">
+
+<strong>Obstacle Challenge</strong>
+
+<a href="https://youtu.be/EnNW7pR3liw">
+  <img src="https://img.youtube.com/vi/EnNW7pR3liw/maxresdefault.jpg" width="400">
+</a>
+
+<br>
+
+<a href="https://youtu.be/EnNW7pR3liw">
+  Watch the Obstacle Challenge Video
+</a>
+
+</td>
+</tr>
+</table>
+
+
 ## 4. Hardware
 
 ### 4.1. Mobility Management
