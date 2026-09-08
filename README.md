@@ -3,16 +3,15 @@ WRO 2026 Future Engineers - DeluluBots
 
 ## Table Of Contents
 1. [Team](#1-team)
-2. [Challenge Overview](#2-challenge-overview)
-3. [Our Robot](#3-our-robot)
-4. [Hardware](#4-hardware)
-    * 4.1. [Mobility Management](#41-mobility-management)
-    * 4.2. [Power and Sense Management](#42-power-and-sense-management)
-5. [Software](#5-software)
-    * 5.1. [Computer Vision](#51-computer-vision)
-    * 5.2. [Vehicle Control](#52-vehicle-control)
-6. [DIY Game Field](#6-diy-game-field)  
-7. [License](#7-license)
+2. [Our Robot](#2-our-robot)
+3. [Hardware](#3-hardware)
+    * 3.1. [Mobility Management](#31-mobility-management)
+    * 3.2. [Power and Sense Management](#32-power-and-sense-management)
+4. [Software](#4-software)
+    * 4.1. [Computer Vision](#41-computer-vision)
+    * 4.2. [Vehicle Control](#42-vehicle-control)
+5. [DIY Game Field](#5-diy-game-field)  
+6. [License](#6-license)
 
 ## 1. Team
 
@@ -143,10 +142,7 @@ I also helped the team stay focused on our goals, encouraged us to keep improvin
 
 ---
 
-
-## 2. Challenge Overview
-
-## 3. Our Robot
+## 2. Our Robot
 
 ### Performance Videos
 
@@ -189,9 +185,9 @@ Take a look at our robot in action during the WRO 2026 Future Engineers challeng
 </table>
 
 
-## 4. Hardware
+## 3. Hardware
 
-### 4.1. Mobility Management
+### 3.1. Mobility Management
 
 #### Chassis Overview
 
@@ -220,7 +216,7 @@ When sizing our drivetrain, we started with basic longitudinal vehicle dynamics 
 | **Gravity (g)** | 9.81 m/s² | Standard constant. |
 
 
-> **Track Friction Unknown:** Since we couldn't afford the official competition mat, we built a DIY track using a standard tarpaulin (see our full guide in the [DIY Low-Cost Competition Track](#6-diy-game-field) section). We obviously can't measure exactly how its friction compares to the official 500 g/m² PVC mat. To compensate for this, we built a fairly large safety margin into our torque calculations.
+> **Track Friction Unknown:** Since we couldn't afford the official competition mat, we built a DIY track using a standard tarpaulin (see our full guide in the [DIY Low-Cost Competition Track](#5-diy-game-field) section). We obviously can't measure exactly how its friction compares to the official 500 g/m² PVC mat. To compensate for this, we built a fairly large safety margin into our torque calculations.
 
 
 **Force and Torque Math**
@@ -415,7 +411,7 @@ To address this issue, we redesigned the support to provide greater constraint a
 The modification increased the stability of the motor mounting structure and helped maintain consistent alignment with the drivetrain during operation. Rather than increasing the size of the surrounding chassis, the support was reinforced specifically in the areas where movement was observed.
 
 
-### 4.2. Power and Sense Management
+### 3.2. Power and Sense Management
 This section details the hardware architecture of our vehicle, covering **component selection and strategic placement**, **power distribution**, **wiring schematics (including custom PCB design)**, **sensor calibration protocols**, and **systematic power testing strategies**.
 
 Our design methodology goes beyond connecting components to achieve basic functionality. We engineered an electrical ecosystem focused on **reproducibility**, **safety**, **noise isolation**, and **rapid pre-competition validation**—ensuring every hardware decision directly supports our vehicle’s autonomous performance goals.
@@ -864,9 +860,9 @@ Odometry scaling factors are verified by commanding the vehicle to travel an exa
 
 #### Vision System & Environmental Lighting Calibration
 Vision calibration verifies camera pitch, Field of View (FOV), exposure, and HSV color thresholds directly on the practice mat. The camera exposure is manually locked to prevent auto-adjusting shutter speeds under fluctuating venue lighting, preventing false line detections from floor glare and shadows.
-## 5. Software
+## 4. Software
 
-### 5.1. Computer Vision
+### 4.1. Computer Vision
 
 #### HSV calibration
 
@@ -1183,13 +1179,13 @@ VisionUtils
     └── replace_color()
 ```
 
-### 5.2. Vehicle Control
+### 4.2. Vehicle Control
 
 #### Obstacle challenge logic
 #### Lap counting
 #### Parking procedure
 
-## 6. DIY Game Field
+## 5. DIY Game Field
 
 ![Field Overview](other/DIY_Field_Photos/field_overview.jpg)
 
@@ -1313,4 +1309,4 @@ The smaller markings and starting zones were measured and drawn manually using a
 
 The finished field became part of our regular testing setup, giving us a consistent environment to test changes to the robot and compare their results.
 
-## 7. License
+## 6. License
