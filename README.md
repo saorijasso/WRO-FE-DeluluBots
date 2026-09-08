@@ -571,7 +571,7 @@ Two XL4015 DC-DC Buck Converters step down variable battery voltages into regula
 >
 > | **Testing Logic Rail (5.0V)** | **Testing Actuator Rail (6.5V)** |
 > | :---: | :---: |
-> | <img src="hardware/multimeter_logic_rail.jpg" alt="Multimeter checking 5V buck converter" width="300"> | <img src="hardware/multimeter_servo_rail.jpg" alt="Multimeter checking 6.5V buck converter" width="300"> |
+> | <img src="other/hardware/multimeter_logic_rail.jpeg" alt="Multimeter checking 5V buck converter" width="250"> | <img src="other/hardware/multimeter_servo_rail.jpeg" alt="Multimeter checking 6.5V buck converter" width="300"> |
 ---
 
 ### Reliability and Safety Considerations
@@ -754,7 +754,7 @@ The following table details the key electronic and electromechanical components 
 Component placement bridges our electrical schematic with the mechanical reality of the chassis. Positioning was dictated by three core constraints: **signal integrity (minimizing wire length)**, **electromagnetic interference (EMI) reduction**, and **accessibility for quick pit-stop maintenance**.
 
 <p align="center">
-  <img src="hardware/pcb_mounted_on_robot.jpg" alt="Final PCB Integrated into Vehicle Chassis" width="800">
+  <img src="other/hardware/pcb_mounted_on_robot.jpeg" alt="Final PCB Integrated into Vehicle Chassis" width="500">
   <br>
   <em>Final logic PCB physically mounted on the vehicle chassis.</em>
 </p>
@@ -785,7 +785,7 @@ The final custom PCB was the result of a systematic iteration process. Before ma
 <p align="center">
   <img src="schemes/hand_drawn_initial_schematic.jpg" alt="Hand-drawn Initial Schematic" width="45%">
   &nbsp;&nbsp;
-  <img src="hardware/breadboard_prototype_assembly.jpg" alt="Breadboard Prototype Assembly" width="45%">
+  <img src="other/hardware/breadboard_prototype_assembly.jpeg" alt="Breadboard Prototype Assembly" width="45%">
   <br>
   <em>Left: Initial hand-drawn circuit mapping. Right: Breadboard logic validation before PCB design.</em>
 </p>
@@ -819,9 +819,9 @@ Our electrical mapping evolved to address noise constraints and incorporate dual
 The printed circuit board was engineered to transform the electrical ecosystem from a fragile prototype into a competition-ready, reproducible system. Rather than relying on independent wiring, the PCB acts as the central nervous system, providing dedicated power distribution planes, shielded signal traces, and secure component mounting.
 
 <p align="center">
-  <img src="hardware/prototype_pcb_design.png" alt="Prototype PCB Iteration" width="45%">
+  <img src="other/hardware/prototype_pcb_design.png" alt="Prototype PCB Iteration" width="45%">
   &nbsp;&nbsp;
-  <img src="hardware/final_pcb_3d_model.png" alt="Final PCB 3D Model" width="45%">
+  <img src="other/hardware/final_pcb_3d_model.png" alt="Final PCB 3D Model" width="45%">
   <br>
   <em>Left: Initial prototype board layout. Right: Final competition-ready custom PCB 3D model.</em>
 </p>
