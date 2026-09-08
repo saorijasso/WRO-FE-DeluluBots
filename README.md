@@ -193,6 +193,228 @@ Take a look at our robot in action during the WRO 2026 Future Engineers challeng
 
 ### 4.1. Mobility Management
 
+#### Chassis Overview
+
+![Robot mechanical overview 1](other/Mechanical/RobotDescription1.png)
+![Robot mechanical overview 2](other/Mechanical/RobotDescription2.png)
+![Robot mechanical overview 3](other/Mechanical/RobotDescription3.png)
+
+*Overview of the robot showing the main mechanical subsystems, components and their relative positions.*
+
+The mechanical design was developed as an integrated system, where the chassis provides the structural base for the drivetrain, steering mechanism, battery, camera, and other components. The position of each subsystem was selected according to the available space and the interaction between mechanical components.
+
+#### Torque and Velocity Reasoning
+
+When sizing our drivetrain, we started with basic longitudinal vehicle dynamics (Newton's 2nd law). Since the track is flat and we're moving relatively slowly, aerodynamic drag doesn't really matter. We only need to overcome inertia and rolling resistance to keep the robot moving.
+
+
+**Base Parameters for our Model**
+
+
+| Parameter | Value | Justification |
+| :--- | :--- | :--- |
+| **Robot mass (m)** | 1.45 kg | Operating just under the WRO 1.5 kg limit, maximizing our weight budget for structural reinforcement. |
+| **Wheel radius (r)** | 32.5 mm | Measured from our 65 mm rubber tires. |
+| **Target acceleration (a)** | 1.0 m/s² | Experimentally derived. Past 1.0 m/s², the wheels start slipping before the motor maxes out, and camera vibrations cause our vision pipeline to drop frames. |
+| **Rolling resistance (Crr)** | ≈ 0.03 | Standard empirical estimate for rubber tires on synthetic surfaces. |
+| **Gravity (g)** | 9.81 m/s² | Standard constant. |
+
+
+> **Track Friction Unknown:** Since we couldn't afford the official competition mat, we built a DIY track using a standard tarpaulin (see our full guide in the [DIY Low-Cost Competition Track](#6-diy-game-field) section). We obviously can't measure exactly how its friction compares to the official 500 g/m² PVC mat. To compensate for this, we built a fairly large safety margin into our torque calculations.
+
+
+**Force and Torque Math**
+
+
+| Step | Formula | Result |
+| :--- | :--- | :--- |
+| **Inertial force** | Fa = m·a | 1.45 N |
+| **Rolling resistance** | Frr = Crr·m·g | 0.427 N |
+| **Wheel torque** | Tw = (Fa + Frr)·r | 0.061 N·m |
+| **Required Motor torque** | Tm = Tw / η | **0.087 N·m** |
+
+
+*Note: The 70% mechanical efficiency (η = 0.70) accounts for the friction we lose through our 3D-printed PETG differential (bevel gears and hex couplings).*
+
+
+---
+
+
+#### Motor and Driver Selection
+
+
+<img align="right" width="300" src="other/Mechanical/motor_differential.jpeg" alt="Image: GM25-370 motor mounted with PETG differential">
+
+
+**Motor: GM25-370, 12V, 330 RPM**  
+The datasheet gives a continuous rated torque of 0.57 N·m (at 1.7 A) and a stall torque of 1.18 N·m (at 5.6 A). Since the robot is constantly driving and the wheels are never locked, we only use the continuous rating to size the system.
+
+
+Our model requires 0.087 N·m, which is only about 15% of this motor's continuous capacity. We deliberately took the weight penalty of an oversized motor for a few practical reasons:
+1. **Thermal Headroom:** Operating a motor near its limit generates a ton of heat. Staying at ~15% load keeps the motor completely cool, meaning we don't experience any RPM sag or battery voltage drops toward the end of a run.
+2. **Friction Buffer:** If the official competition mat turns out to be much stickier than our tarp, this torque buffer gives us enough margin to avoid stalling in normal operation.
+3. **Overcoming Mechanics:** The extra torque easily powers through the friction of our PETG differential, keeping our PID speed control crisp and responsive.
+
+
+**Driver: Transitioning to the BTS7960**  
+We originally prototyped with a TB6612FNG driver, but realized it was a major single point of failure. It's only rated for 1.2 A continuous per channel, and our motor can spike up to 5.6 A if it stalls (like bumping a wall or getting stuck).
+
+
+Instead of risking a blown driver on the track, we swapped to a **BTS7960**. It’s rated for 43 A. It takes up more space on the chassis, but it greatly reduces the chance of the driver overheating. We chose reliability over spatial economy.
+
+
+---
+
+
+#### 3D Printing & Structural Optimization
+
+
+<img align="left" width="300" src="other/Mechanical/gyroid_slicer.jpeg" alt="Image: Gyroid infill pattern in slicer or printed part">
+
+
+To iterate quickly, we 3D printed all our custom mechanical parts using **PETG**, which gives us much better impact resistance and layer adhesion than standard PLA.
+
+
+**Prototyping phase:**  
+We printed early test fits using an **8% Gyroid infill**. It allowed us to print super fast and save filament during the trial-and-error phase. The Gyroid pattern distributes stress equally across the X, Y, and Z axes, so the pieces held their shape well. However, when we actively applied manual stress tests to find their limits, they eventually snapped. This proved they were strictly prototypes and nowhere near strong enough to survive the mechanical stress of a real competition.
+
+
+**Final Production Parts:**  
+For the final parts, we prioritized reliability so we optimized the slicer settings to get as much strength as possible without adding too much weight:
+* **Wall Loops:** Increased from 2 to 3.
+* **Top/Bottom Shells:** Increased from 2 to 3.
+* **Gyroid Infill:** Bumped slightly to 15%.
+
+
+**The result:** With these settings, we were able to add strength mainly where it matters without adding too much material. This kept our parts structurally rigid without unnecessarily increasing our total mass or messing up our calculated acceleration dynamics.
+
+
+<img align="right" width="300" src="other/Mechanical/gear_modifier.jpeg" alt="Image: Slicer view showing cylindrical modifier on the D-shaft gear">
+
+
+**Targeted Reinforcement: Motor Gear Hub**  
+During testing, we discovered a localized failure mode in our differential. The primary drive gear mounts directly to the motor's D-shaft. Due to the continuous torque and friction from sudden acceleration, the D-shaped hole inside the PETG gear was deforming and wearing out into a circle, causing the motor shaft to spin freely without turning the transmission.
+
+
+Instead of printing the entire gear with 100% infill (which would add unnecessary mass and print time), we added a cylindrical modifier in Bambu Studio specifically around the mounting hub. We assigned 6 wall loops exclusively to this modifier. This generated a highly dense, rigid core to grip the D-shaft perfectly, while leaving the outer gear teeth at the standard 15% infill, solving the stripping issue completely.
+
+
+#### Steering and Traction Mechanism
+
+We selected an **Ackermann steering system** based on the turning requirements of our robot and the characteristics of the competition field. We considered conventional steering, Ackermann steering, and anti-Ackermann steering as possible solutions.
+
+| Steering System | Turning Geometry | Tire Slip | Low-Speed Maneuverability | Mechanical Complexity | Alignment Requirements | Suitability for Our Robot |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Conventional Steering** | Both front wheels use approximately the same steering angle | Higher during tight turns because the wheels follow different turning radii | Moderate | Low | Low | Limited |
+| **Ackermann Steering** | Inner wheel turns more than the outer wheel, allowing both wheels to follow their respective turning radii | Low | High | Medium | Medium–High | **Excellent** |
+| **Anti-Ackermann Steering** | Inner wheel turns less than the outer wheel | Can be advantageous in specific high-speed conditions, but may increase slip at low speeds | Low–Moderate for our application | Medium | Medium–High | Limited |
+
+We selected Ackermann because it allows the inner and outer front wheels to follow different turning radii, reducing unnecessary tire slip during turns and providing more predictable steering behavior.
+
+This decision was also connected to our drivetrain architecture. Since the robot uses mechanically driven wheels rather than independently controlled drive wheels, we needed a steering solution that could provide precise directional control without using differential wheel speeds as the steering mechanism. Ackermann steering allowed us to separate the steering function from the traction system while maintaining a compact mechanical architecture.
+
+#### Steering Geometry
+
+The steering geometry was designed in CAD using the Ackermann principle. Instead of assigning the same steering angle to both front wheels, we constructed the geometry so that the steering axes of the front wheels converge toward a common **instantaneous center of rotation**.
+
+![Ackermann steering geometry](other/Mechanical/SteeringSketch.png)
+
+*CAD construction used to define the Ackermann steering geometry.*
+
+This geometry determines the relative steering angles of the front wheels: the **inner wheel turns through a greater angle than the outer wheel** because it follows a smaller turning radius. This reduces unnecessary tire slip and allows the robot to maintain a more predictable trajectory during turns.
+
+The CAD sketch was used to determine the position of the steering pivots and linkage attachment points before manufacturing the mechanism. This allowed us to translate the theoretical Ackermann geometry into a physical linkage while accounting for the available space, wheel position, and required steering range.
+
+The steering mechanism consists of the **steering servo, servo arm, fixed steering support, linkage rods, steering arms, and front wheel assemblies**. The servo provides the input rotation, which is transferred through the linkage to both steering arms. The geometry of the steering arms produces the different steering angles required by the Ackermann configuration.
+
+#### Space Optimization
+
+The front section of the robot had limited space because the **front wheels, steering mechanism, and servo** had to fit within the same area. Rather than adding a separate structure to support the steering linkage, we integrated the **servo mount with the fixed steering support**.
+
+The servo mount therefore serves two functions: it securely holds the servo and acts as the stationary reference point for the steering linkage. Small arms extending from this support provide the attachment points for the linkage rods, while the rest of the steering mechanism moves around this fixed structure.
+
+This integration reduced the number of separate components and allowed us to make better use of the available space. It also reduced material usage while maintaining the rigidity required by the steering mechanism.
+
+![Servo support iterations](other/Mechanical/ServoHolderVersions.jpeg)
+
+*Evolution of the servo support through different design iterations, showing the modifications made to improve its integration, stability, and fit within the steering mechanism.*
+
+This was an example of adapting the theoretical steering geometry to the physical constraints of the robot rather than treating the steering system independently from the rest of the chassis.
+
+#### Mechanical Differential
+
+The Ackermann steering geometry also created a requirement for the traction system: the driven wheels need to be able to rotate at **different speeds during a turn**.
+
+During a turn, the inner wheel follows a smaller radius than the outer wheel and therefore travels a shorter distance. If both driven wheels were rigidly connected to the same axle, they would be forced to rotate at the same speed. This would cause tire slip and introduce additional mechanical stress.
+
+To solve this, we implemented a **mechanical open differential**. This allows both driven wheels to receive power from the same drivetrain while permitting them to rotate at different speeds when cornering.
+
+We selected a mechanical differential because it provides this speed difference mechanically, without requiring independent control of the driven wheels. This complements the Ackermann steering geometry while keeping the drivetrain compact.
+
+The differential uses **20-tooth side gears and 12-tooth spider gears**. The side gears are connected to the driven axles, while the spider gears transfer torque between them and allow relative rotation between the two sides.
+
+The main drive gear maintains a **1:1 relationship with the motor output**, preserving the available motor speed without introducing an additional reduction stage at the differential.
+
+#### Differential Iterations
+
+Our drivetrain went through several iterations before reaching the final configuration. The first prototype used **spur gears** both in the motor-to-differential transmission and within the differential.
+
+| Initial Prototype | Final Design |
+| :---: | :---: |
+| ![Initial motor gear](other/Mechanical/SpurGear.png) | ![Final motor gear](models/MotorGear.png) |
+| *Spur gear* | *Final reinforced gear* |
+| ![Initial differential](other/Mechanical/SpurDifferential.png) | ![Final differential](models/GearDifferential.png) |
+| *Initial differential* | *Final differential* |
+
+*Evolution of the drivetrain from the initial spur-gear prototype to the final design.*
+
+The initial version allowed us to validate the basic drivetrain concept and confirm the interaction between the motor and differential. However, testing revealed several mechanical weaknesses that led to subsequent iterations.
+
+The main gears were initially designed as **spur gears**. We later changed them to **herringbone gears** to improve resistance to lateral movement and maintain better alignment during operation.
+
+#### Axle Support Iteration
+
+During testing of the initial differential housing, we observed that the driven axles were supported at only two points. This allowed the shafts to deflect under their own load and during operation, causing them to become slightly misaligned with the differential gears.
+
+![Initial axle support](other/Mechanical/AxleSag.jpeg)
+
+*Initial axle configuration showing shaft deflection caused by insufficient support.*
+
+To address this issue, we redesigned the rear support structure to provide an additional support point for the driven axles.
+
+![Axle support redesign](models/RobotAssemblyBack.png)
+
+*Axle support redesign adding an additional constraint point to reduce shaft deflection.*
+
+The additional support constrains the shafts along a greater portion of their length, reducing unwanted movement and helping maintain consistent alignment between the axles and the differential gears.
+
+This modification was made specifically in response to the deformation observed during testing. Rather than increasing the overall size of the differential housing, we added support only where the deformation occurred. This improved structural stability while keeping the mechanism compact.
+
+Additionally, the supports holding the spider gears were initially too thin and fragile. We increased their thickness and added reinforcing tabs connecting them to the main differential body. Because changing the spacing between these supports would affect the existing gear geometry, the reinforcement was added without changing their position.
+
+Finally, during testing of the first herringbone version, the main gears could still separate slightly under load, causing the teeth to skip. We modified the differential housing to keep the gears closer together and maintain consistent tooth engagement.
+
+These iterations allowed us to improve the drivetrain based on problems observed during physical testing, resulting in a final differential with improved **gear alignment, shaft support, structural rigidity, and power transmission reliability**.
+
+#### Motor Support
+
+The motor support was developed to securely hold the drive motor while maintaining its position relative to the drivetrain. In the initial version, the motor was not fully enclosed by the support structure.
+
+![Initial motor support](other/Mechanical/MotorHolderV1.png)
+
+*Initial motor support design with limited constraint around the motor.*
+
+During testing, we observed that the torque generated by the motor caused the support to tend to move upward. This movement could affect the position of the motor and consequently the alignment between the motor output gear and the drivetrain.
+
+To address this issue, we redesigned the support to provide greater constraint around the motor body.
+
+![Final motor support](other/Mechanical/MotorHoldersFinal.png)
+
+*Final motor support design providing greater constraint around the motor.*
+
+The modification increased the stability of the motor mounting structure and helped maintain consistent alignment with the drivetrain during operation. Rather than increasing the size of the surrounding chassis, the support was reinforced specifically in the areas where movement was observed.
+
+
 ### 4.2. Power and Sense Management
 This section details the hardware architecture of our vehicle, covering **component selection and strategic placement**, **power distribution**, **wiring schematics (including custom PCB design)**, **sensor calibration protocols**, and **systematic power testing strategies**.
 
@@ -744,49 +966,36 @@ These values are later loaded by the vision pipeline and used during obstacle de
 
 ###### Red Signs
 
-| Threshold Adjustment | Saving Configuration | Generated Mask |
-| :---: | :---: | :---: |
-|  |  |  |
+![Red Sign Calibration](other/Calibration/CalibrationRed.jpeg)
 
 ---
 
 ###### Green Signs
 
-| Threshold Adjustment | Saving Configuration | Generated Mask |
-| :---: | :---: | :---: |
-|  |  |  |
-
+![Green Sign Calibration](other/Calibration/CalibrationGreen.jpeg)
 ---
 
 ###### Blue Lines
 
-| Threshold Adjustment | Saving Configuration | Generated Mask |
-| :---: | :---: | :---: |
-|  |  |  |
+![Blue line Calibration](other/Calibration/CalibrationBlue.jpeg)
 
 ---
 
 ###### Orange Lines
 
-| Threshold Adjustment | Saving Configuration | Generated Mask |
-| :---: | :---: | :---: |
-|  |  |  |
+![Orange line Calibration](other/Calibration/CalibrationOrange.jpeg)
 
 ---
 
 ###### Parking Walls
 
-| Threshold Adjustment | Saving Configuration | Generated Mask |
-| :---: | :---: | :---: |
-|  |  |  |
+![Pink Wall Calibration](other/Calibration/CalibrationPink.jpeg)
 
 ---
 
 ###### White Space
 
-| Threshold Adjustment | Saving Configuration | Generated Mask |
-| :---: | :---: | :---: |
-|  |  |  |
+![White Space Calibration](other/Calibration/CalibrationWhite.jpeg)
 
 #### Element detection
 
