@@ -129,7 +129,7 @@ class VisionUtils:
         return cv2.morphologyEx(frame, cv2.MORPH_CLOSE, kernel)  
     
     @staticmethod
-    def keep_largest_white(frame, min_area_fraction=0.05, confirm_fraction=0.75):
+    def keep_largest_white(frame, min_area_fraction=0.08, confirm_fraction=0.75):
         """
         Keeps only the largest valid white region in a binary image.
 
@@ -172,7 +172,91 @@ class VisionUtils:
         cv2.drawContours(result, [largest], -1, 255, thickness=cv2.FILLED)
 
         return result
-    
+
+    @staticmethod
+    def find_wall_to_follow(mask, direction, nbr_cols=15):
+        """
+        Scans binary mask boundaries to locate the wall position for steering.
+
+        Args:
+            mask (numpy.ndarray): Binary image mask containing wall data.
+            direction (str): Driving direction ("Clockwise" or "CounterClockwise").
+            nbr_cols (int, optional): Number of outer columns to scan for vertical alignment.
+
+        Returns:
+            tuple:
+                - float: Mean X-coordinate of detected wall boundary.
+                - float: Mean Y-coordinate of detected wall boundary.
+                Returns (None, None) if no wall boundary is found.
+        """
+        h, w = mask.shape[:2]
+
+        # Safe vertical range (30% to 85% height)
+        y_min = int(h * 0.3)
+        y_max = int(h * 0.85)
+
+        # Configure lateral sweep limits
+        if direction == "Clockwise":
+            x_outer = w - 1
+            x_inner = int(w * 0.65)
+            x_step = -1
+            cols = range(w - nbr_cols, w)
+        else:
+            x_outer = 0
+            x_inner = int(w * 0.35)
+            x_step = 1
+            cols = range(0, nbr_cols)
+
+        # Vertical scan (Y) at edge columns
+        y_vals = []
+        for x in cols:
+            for y in range(y_max, y_min, -1):
+                if mask[y, x] == 0:
+                    y_vals.append(y)
+                    break
+
+        # Horizontal scan (X) towards inner threshold
+        x_vals = []
+        rows = range(y_min, y_max, 5)
+        for y in rows:
+            for x in range(x_outer, x_inner, x_step):
+                if mask[y, x] == 0:
+                    x_vals.append(x)
+                    break
+
+        if not y_vals or not x_vals:
+            return None, None
+
+        avg_y = float(np.mean(y_vals))
+        avg_x = float(np.mean(x_vals))
+
+        return avg_x, avg_y
+
+    @staticmethod
+    def find_real_corner(mask, direction):
+        """
+        Locates the physical corner coordinates of a wall boundary.
+
+        Args:
+            mask (numpy.ndarray): Binary mask image.
+            direction (str): Driving direction ("Clockwise" or "CounterClockwise").
+
+        Returns:
+            tuple:
+                - int: X-coordinate of the detected corner.
+                - int: Y-coordinate of the detected corner.
+                Returns (None, None) if no corner is detected.
+        """
+        height, width = mask.shape[:2]
+
+        for y in range(height):
+            for x in range(width):
+                if x + 10 < width:
+                    if mask[y, x] == 0 and mask[y, x + 10] == 255:
+                        return x, y
+
+        return None, None
+        
     @staticmethod
     def detect_element(frame, color_ranges, color, min_area):
         """

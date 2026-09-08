@@ -4,7 +4,8 @@ from camera.camera import Camera
 from config import saved_ranges
 from processing.transform_image import VisionUtils
 from processing.telemetry_display import TelemetryDisplay
-from navigation.direction_manager import NavigationManager, LapTracker       
+from navigation.direction_manager import Direction, NavigationManager, LapTracker
+from navigation.wall_follower_controller import WallFollowerController       
 
 
 class ImageManager:
@@ -15,28 +16,30 @@ class ImageManager:
         """
 
         self.camera = Camera()
+        self.wall_follower = WallFollowerController(pic_width=700, pic_height=350)
 
         cv2.namedWindow("Walls")
         cv2.namedWindow("Pillars")
         cv2.namedWindow("Mask")
 
-    def process_walls(self, frame):
+    def process_walls(self, frame, direction):
         """
-        Applies the wall detection pipeline.
+        Processes image frame to track wall boundaries and compute steering parameters.
 
         Args:
-            frame (numpy.ndarray): Original frame.
+            frame (numpy.ndarray): Input camera frame in BGR format.
+            direction (str): Driving direction ("Clockwise" or "CounterClockwise").
 
         Returns:
-            numpy.ndarray: Processed binary image containing the detected wall.
+            tuple:
+                - numpy.ndarray: Rendered image with visual telemetry overlays.
+                - int: Calculated steering angle in degrees.
+                - bool: True if an upcoming corner turn is detected, False otherwise.
         """
-
+        # Preprocessing pipeline
         image = VisionUtils.replace_color(
-            frame,
-            saved_ranges.color_ranges,
-            ["Red", "Green"]
+            frame, saved_ranges.color_ranges, ["Red", "Green"]
         )
-
         image = VisionUtils.resize(image, 700, 350)
         image = VisionUtils.grayscale(image)
         image = VisionUtils.blur(image)
@@ -44,7 +47,41 @@ class ImageManager:
         image = VisionUtils.clean_binary(image)
         image = VisionUtils.keep_largest_white(image)
 
-        return image
+        # Lateral wall centroid detection
+        avg_x, avg_y = VisionUtils.find_wall_to_follow(image, direction)
+
+        if avg_x is None or avg_y is None:
+            return None, 90, False
+
+        # Physical corner detection
+        corner_x, corner_y = VisionUtils.find_real_corner(image, direction)
+
+        should_turn = corner_y > 200 if (corner_x is not None and corner_y is not None) else False
+
+        # Calculate base steering via PD controller
+        steering_angle, pd_corner = self.wall_follower.calculate_steering(
+            avg_x, avg_y, direction, kp=0.35, kd=0.25, threshold=480
+        )
+
+        # Override steering angle if corner is nearby
+        if should_turn:
+            steering_angle = 60 if direction == "Clockwise" else 120
+
+        # Telemetry overlay drawing
+        result = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+        # Wall tracking point (Yellow)
+        cv2.circle(result, (int(avg_x), int(avg_y)), 7, (0, 255, 255), -1)
+
+        # Real corner point (Blue)
+        if corner_x is not None and corner_y is not None:
+            cv2.circle(result, (int(corner_x), int(corner_y)), 9, (255, 191, 0), -1)
+
+        if should_turn:
+            cv2.putText(result, "TURNING NOW!", (50, 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+        return result, steering_angle, should_turn
 
     def process_elements(self, frame, colors, min_area, method):
         """
@@ -129,11 +166,12 @@ class ImageManager:
 
     def run_test_from_image(self, path):
         """
-        Runs the processing pipeline using a saved image.
+        Runs navigation pipeline on a single static image file for testing.
 
         Args:
-            path (str): Image path.
+            path (str): File system path to input image.
         """
+        nav_manager = NavigationManager()
 
         frame = cv2.imread(path)
 
@@ -141,10 +179,22 @@ class ImageManager:
             print(f"Could not open image: {path}")
             return
 
-        walls = self.process_walls(frame)
+        pillars_color, pillars, pillar_mask = self.process_elements(
+            frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
+        )
+        line_color, line, line_mask = self.process_elements(
+            frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
+        )
 
-        pillars_color, pillars, pillar_mask = self.process_elements(frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar)
-        line_color, line, line_mask = self.process_elements(frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line)
+        if line_color:
+            nav_manager.line_direction(line_color)
+
+        if nav_manager.direction:
+            current_dir = nav_manager.direction.value if isinstance(nav_manager.direction, Direction) else nav_manager.direction
+        else:
+            current_dir = "Clockwise"
+
+        walls, steering_angle, is_corner = self.process_walls(frame, current_dir)
 
         self.show_results({
             "Walls": walls,
@@ -156,13 +206,14 @@ class ImageManager:
 
         print("Pillar: " + str(pillars_color))
         print("Line: " + str(line_color))
+        print(f"Servo Angle: {steering_angle}° | Corner: {is_corner} | Dir: {current_dir}")
 
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
     def run_test(self):
         """
-        Runs the processing pipeline using the camera stream.
+        Runs the continuous live execution loop using camera feed.
         """
         nav_manager = NavigationManager()
         lap_tracker = LapTracker()
@@ -171,8 +222,6 @@ class ImageManager:
             frame = self.camera.read()
             if frame is None:
                 break
-
-            walls = self.process_walls(frame)
 
             pillars_color, pillars, pillar_mask = self.process_elements(
                 frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
@@ -183,6 +232,13 @@ class ImageManager:
 
             line = self.process_navigation(line_color, line, nav_manager, lap_tracker)
 
+            if nav_manager.direction:
+                current_dir = nav_manager.direction.value if isinstance(nav_manager.direction, Direction) else nav_manager.direction
+            else:
+                current_dir = "Clockwise"
+
+            walls, steering_angle, is_corner = self.process_walls(frame, current_dir)
+
             self.show_results({
                 "Walls": walls,
                 "Pillars": pillars,
@@ -191,11 +247,9 @@ class ImageManager:
                 "Line Mask": line_mask
             })
 
-            print(f"Corners: {lap_tracker.corners} | Phase: {lap_tracker.phase.name} | Dir: {nav_manager.direction}")
-            print("Pillar: " + str(pillars_color))
-            print("Line: " + str(line_color))
+            print(f"Corners: {lap_tracker.corners} | Phase: {lap_tracker.phase.name} | Dir: {current_dir}")
+            print(f"Servo Angle: {steering_angle}° | Corner: {is_corner}")
 
-           
             if cv2.waitKey(1) == 27: 
                 break
 
