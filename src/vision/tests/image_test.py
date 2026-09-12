@@ -1,4 +1,10 @@
 import sys
+from pathlib import Path
+
+# Obtener la ruta raíz de la carpeta 'src'
+SRC_DIR = Path(__file__).resolve().parents[2]
+if str(SRC_DIR) not in sys.path:
+    sys.path.append(str(SRC_DIR))
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

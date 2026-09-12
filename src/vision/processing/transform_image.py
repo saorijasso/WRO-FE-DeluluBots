@@ -234,26 +234,60 @@ class VisionUtils:
 
     @staticmethod
     def find_real_corner(mask, direction):
-        """
-        Locates the physical corner coordinates of a wall boundary.
-
-        Args:
-            mask (numpy.ndarray): Binary mask image.
-            direction (str): Driving direction ("Clockwise" or "CounterClockwise").
-
-        Returns:
-            tuple:
-                - int: X-coordinate of the detected corner.
-                - int: Y-coordinate of the detected corner.
-                Returns (None, None) if no corner is detected.
-        """
+        """Locates the physical corner coordinates of a wall boundary."""
         height, width = mask.shape[:2]
 
-        for y in range(height):
-            for x in range(width):
-                if x + 10 < width:
-                    if mask[y, x] == 0 and mask[y, x + 10] == 255:
-                        return x, y
+        # Normalizar string de dirección
+        dir_str = str(direction.value if hasattr(direction, 'value') else direction).upper()
+        is_clockwise = "CLOCKWISE" in dir_str and "COUNTER" not in dir_str
+
+        # Trabajar únicamente en la zona vertical donde las paredes son relevantes (evitar ruido de arriba/abajo)
+        y_min = int(height * 0.20)
+        y_max = int(height * 0.85)
+
+        if is_clockwise:
+            # 1. ESQUINA A LA DERECHA (Clockwise)
+            # Analizar el perfil del borde DERECHO de la pared por cada fila Y
+            edge_profile = []
+            for y in range(y_min, y_max):
+                # Buscar el último píxel blanco de la masa principal en esa fila
+                white_pixels = np.where(mask[y, :] == 255)[0]
+                if len(white_pixels) > 0:
+                    # Filtramos hilos delgados ignorando píxeles sueltos del borde extremo si no están conectados
+                    max_x = white_pixels[-1]
+                    edge_profile.append((max_x, y))
+
+            if len(edge_profile) < 10:
+                return None, None
+
+            # Buscar el cambio abrupto en X (donde la pared se corta hacia la izquierda)
+            for i in range(5, len(edge_profile)):
+                x_curr, y_curr = edge_profile[i]
+                x_prev, y_prev = edge_profile[i - 5]
+
+                # Si el borde derecho retrocede bruscamente hacia la izquierda (caída en X)
+                if x_prev - x_curr > 30:  # Salto de más de 30px hacia adentro
+                    return x_curr, y_curr
+
+        else:
+            # 2. ESQUINA A LA IZQUIERDA (CounterClockwise)
+            edge_profile = []
+            for y in range(y_min, y_max):
+                white_pixels = np.where(mask[y, :] == 255)[0]
+                if len(white_pixels) > 0:
+                    min_x = white_pixels[0]
+                    edge_profile.append((min_x, y))
+
+            if len(edge_profile) < 10:
+                return None, None
+
+            for i in range(5, len(edge_profile)):
+                x_curr, y_curr = edge_profile[i]
+                x_prev, y_prev = edge_profile[i - 5]
+
+                # Si el borde izquierdo avanza bruscamente hacia la derecha
+                if x_curr - x_prev > 30:
+                    return x_curr, y_curr
 
         return None, None
         

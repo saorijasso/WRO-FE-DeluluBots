@@ -1,6 +1,7 @@
 import cv2
 
 from camera.camera import Camera
+from comms.ESP32bridge import ESP32Bridge
 from config import saved_ranges
 from processing.transform_image import VisionUtils
 from processing.telemetry_display import TelemetryDisplay
@@ -17,23 +18,25 @@ class ImageManager:
 
         self.camera = Camera()
         self.wall_follower = WallFollowerController(pic_width=700, pic_height=350)
+        self.serial_bridge = ESP32Bridge()
 
         cv2.namedWindow("Walls")
         cv2.namedWindow("Pillars")
         cv2.namedWindow("Mask")
 
-    def process_walls(self, frame, direction):
+    def process_walls(self, frame, direction, current_yaw):
         """
-        Processes image frame to track wall boundaries and compute steering parameters.
+        Processes image frame to track wall boundaries and compute target IMU heading.
 
         Args:
             frame (numpy.ndarray): Input camera frame in BGR format.
             direction (str): Driving direction ("Clockwise" or "CounterClockwise").
+            current_yaw (float): Current Yaw orientation angle from IMU in degrees.
 
         Returns:
             tuple:
                 - numpy.ndarray: Rendered image with visual telemetry overlays.
-                - int: Calculated steering angle in degrees.
+                - float: Calculated target IMU Yaw angle in degrees (0 to 360).
                 - bool: True if an upcoming corner turn is detected, False otherwise.
         """
         # Preprocessing pipeline
@@ -51,21 +54,21 @@ class ImageManager:
         avg_x, avg_y = VisionUtils.find_wall_to_follow(image, direction)
 
         if avg_x is None or avg_y is None:
-            return None, 90, False
+            # If no wall is detected, keep current heading and do not force a corner
+            return None, current_yaw, False
 
         # Physical corner detection
         corner_x, corner_y = VisionUtils.find_real_corner(image, direction)
 
         should_turn = corner_y > 200 if (corner_x is not None and corner_y is not None) else False
 
-        # Calculate base steering via PD controller
-        steering_angle, pd_corner = self.wall_follower.calculate_steering(
-            avg_x, avg_y, direction, kp=0.35, kd=0.25, threshold=480
+        # Calculate target IMU heading via wall follower controller
+        target_yaw, pd_corner = self.wall_follower.calculate_target_yaw(
+            avg_x, avg_y, direction, current_yaw, threshold=480
         )
 
-        # Override steering angle if corner is nearby
-        if should_turn:
-            steering_angle = 60 if direction == "Clockwise" else 120
+        # Combine corner detections (either physical vision corner or PD drop)
+        is_corner = should_turn or pd_corner
 
         # Telemetry overlay drawing
         result = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
@@ -77,11 +80,11 @@ class ImageManager:
         if corner_x is not None and corner_y is not None:
             cv2.circle(result, (int(corner_x), int(corner_y)), 9, (255, 191, 0), -1)
 
-        if should_turn:
+        if is_corner:
             cv2.putText(result, "TURNING NOW!", (50, 50), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        return result, steering_angle, should_turn
+        return result, target_yaw, is_corner
 
     def process_elements(self, frame, colors, min_area, method):
         """
@@ -189,12 +192,9 @@ class ImageManager:
         if line_color:
             nav_manager.line_direction(line_color)
 
-        if nav_manager.direction:
-            current_dir = nav_manager.direction.value if isinstance(nav_manager.direction, Direction) else nav_manager.direction
-        else:
-            current_dir = "Clockwise"
+        current_dir = "Clockwise"
 
-        walls, steering_angle, is_corner = self.process_walls(frame, current_dir)
+        walls, target_yaw, is_corner = self.process_walls(frame, current_dir, current_yaw=0)
 
         self.show_results({
             "Walls": walls,
@@ -206,52 +206,79 @@ class ImageManager:
 
         print("Pillar: " + str(pillars_color))
         print("Line: " + str(line_color))
-        print(f"Servo Angle: {steering_angle}° | Corner: {is_corner} | Dir: {current_dir}")
+        print(f"Robot Angle: {target_yaw}° | Corner: {is_corner} | Dir: {current_dir}")
 
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
     def run_test(self):
-        """
-        Runs the continuous live execution loop using camera feed.
-        """
+        """Runs the continuous live execution loop using camera feed and IMU targets."""
         nav_manager = NavigationManager()
         lap_tracker = LapTracker()
 
-        while True:
-            frame = self.camera.read()
-            if frame is None:
-                break
+        current_yaw = 0.0
 
-            pillars_color, pillars, pillar_mask = self.process_elements(
-                frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
-            )
-            line_color, line, line_mask = self.process_elements(
-                frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
-            )
+        try:
+            while True:
+                frame = self.camera.read()
+                if frame is None:
+                    break
 
-            line = self.process_navigation(line_color, line, nav_manager, lap_tracker)
+                # 1. RETROALIMENTACIÓN: Leer el Yaw real que envía la ESP32 (si está disponible)
+                if self.serial_bridge:
+                    sensor_yaw = self.serial_bridge.read_current_yaw()
+                    if sensor_yaw is not None:
+                        current_yaw = sensor_yaw
 
-            if nav_manager.direction:
-                current_dir = nav_manager.direction.value if isinstance(nav_manager.direction, Direction) else nav_manager.direction
-            else:
-                current_dir = "Clockwise"
+                # 2. Procesamiento de elementos de visión
+                pillars_color, pillars, pillar_mask = self.process_elements(
+                    frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
+                )
+                line_color, line, line_mask = self.process_elements(
+                    frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
+                )
 
-            walls, steering_angle, is_corner = self.process_walls(frame, current_dir)
+                line = self.process_navigation(
+                    line_color, line, nav_manager, lap_tracker
+                )
 
-            self.show_results({
-                "Walls": walls,
-                "Pillars": pillars,
-                "Pillar Mask": pillar_mask,
-                "Lines": line,
-                "Line Mask": line_mask
-            })
+                if nav_manager.direction:
+                    current_dir = (
+                        nav_manager.direction.value
+                        if isinstance(nav_manager.direction, Direction)
+                        else nav_manager.direction
+                    )
+                else:
+                    current_dir = "Clockwise"
 
-            print(f"Corners: {lap_tracker.corners} | Phase: {lap_tracker.phase.name} | Dir: {current_dir}")
-            print(f"Servo Angle: {steering_angle}° | Corner: {is_corner}")
+                # 3. Calcular target_yaw usando la pared y el current_yaw actual
+                walls, target_yaw, is_corner = self.process_walls(
+                    frame, current_dir, current_yaw
+                )
 
-            if cv2.waitKey(1) == 27: 
-                break
+                # 4. ENVIAR COMANDO A LA ESP32
+                if self.serial_bridge:
+                    self.serial_bridge.send_target_heading(target_yaw, is_corner)
 
-        self.camera.release()
-        cv2.destroyAllWindows()
+                # 5. Renderizado y Telemetría
+                self.show_results({
+                    "Walls": walls,
+                    "Pillars": pillars,
+                    "Pillar Mask": pillar_mask,
+                    "Lines": line,
+                    "Line Mask": line_mask,
+                })
+
+                print(
+                    f"Current Yaw: {current_yaw:.1f}° | Target Yaw: {target_yaw:.1f}° | Corner: {is_corner}"
+                )
+
+                if cv2.waitKey(1) == 27:
+                    break
+
+        finally:
+            # Asegura cerrar el puerto serie correctamente al salir con ESC o interrupción
+            if self.serial_bridge:
+                self.serial_bridge.close()
+            self.camera.release()
+            cv2.destroyAllWindows()

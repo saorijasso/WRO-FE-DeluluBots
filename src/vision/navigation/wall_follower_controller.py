@@ -22,55 +22,58 @@ class WallFollowerController:
         self.pic_height = pic_height
         self.old_p_adjust = 0.0
 
-    def calculate_steering(
-        self, avg_x, avg_y, direction, kp=0.35, kd=0.25, threshold=480
+    def calculate_target_yaw(
+        self,
+        avg_x,
+        avg_y,
+        direction,
+        current_yaw,
+        threshold=480,
     ):
-        """
-        Calculates the steering angle using a PD algorithm and checks for corners.
+        """Calculates the target IMU heading based on visual wall offset.
 
-        Normalizes the horizontal position based on the driving direction,
-        computes proportional and derivative error adjustments, and applies
-        a direction-dependent sign so that corners trigger turns in the
-        correct physical direction.
+        Instead of computing servo angles directly, this function determines
+        the desired IMU yaw target to be sent to an external microcontroller
+        (e.g., ESP32) for low-level motor control.
 
         Args:
-            avg_x (float): X-coordinate of the wall centroid in pixels.
-            avg_y (float): Y-coordinate of the wall centroid in pixels.
+            avg_x (float): X-coordinate of wall centroid in pixels.
+            avg_y (float): Y-coordinate of wall centroid in pixels.
             direction (str): Driving direction ("Clockwise" or "CounterClockwise").
-            kp (float, optional): Proportional gain for steering adjustment.
-            kd (float, optional): Derivative gain for damping rapid changes.
-            threshold (float, optional): Reference target value for error calculation.
+            current_yaw (float): Current Yaw orientation angle from IMU in degrees.
+            threshold (float, optional): Target baseline value for vision.
+              Defaults to 480.
 
         Returns:
             tuple:
-                - int: Clipped steering servo angle in degrees (70 to 130).
-                - bool: True if a corner transition is detected based on a sudden
-                  derivative error drop, False otherwise.
+                - float: Desired target Yaw angle in degrees (0 to 360).
+                - bool: True if a corner transition is detected, False otherwise.
         """
-        # Normalize X according to driving direction
+        # 1. Normalize horizontal coordinate based on driving direction
         new_avg_x = (
             avg_x
             if direction == "CounterClockwise"
             else (self.pic_width - avg_x)
         )
 
-        # Proportional error (Virtual Target Error)
+        # 2. Vision-based error calculation
         p_adjust = avg_y + new_avg_x - threshold
-
-        # Derivative calculation
         p_compare = p_adjust - self.old_p_adjust
-        d_adjust = p_compare * kd
-
-        # Corner drop detection
-        is_corner = p_compare < (-1 * (self.pic_height // 2.5))
-
-        # Direction-dependent steering angle (Angle < 90° turns right in Clockwise)
-        dir_sign = -1 if direction == "Clockwise" else 1
-        raw_angle = 90 + dir_sign * ((p_adjust * kp) + d_adjust)
-
         self.old_p_adjust = p_adjust
 
-        # Clip angle to servo physical limits
-        steering_angle = int(np.clip(raw_angle, 70, 130))
+        # 3. Detect corner condition
+        is_corner = p_compare < (-1 * (self.pic_height // 2.5))
 
-        return steering_angle, is_corner
+        if is_corner:
+            # Corner detected: shift target heading by 90 degrees according to track direction
+            turn_angle = 90 if direction == "CounterClockwise" else -90
+            target_yaw = (current_yaw + turn_angle) % 360
+        else:
+            # Straight path: calculate minor angle offset based on wall distance
+            # Converts pixel error into a slight angular offset (e.g., max +-10 to 15 degrees)
+            angle_offset = (p_adjust * 0.05) * (
+                -1 if direction == "Clockwise" else 1
+            )
+            target_yaw = (current_yaw + angle_offset) % 360
+
+        return target_yaw, is_corner
