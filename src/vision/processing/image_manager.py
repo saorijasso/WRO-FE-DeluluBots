@@ -20,10 +20,6 @@ class ImageManager:
         self.wall_follower = WallFollowerController(pic_width=700, pic_height=350)
         self.serial_bridge = ESP32Bridge()
 
-        cv2.namedWindow("Walls")
-        cv2.namedWindow("Pillars")
-        cv2.namedWindow("Mask")
-
     def process_walls(self, frame, direction, current_yaw):
         """
         Processes image frame to track wall boundaries and compute target IMU heading.
@@ -275,6 +271,69 @@ class ImageManager:
 
                 if cv2.waitKey(1) == 27:
                     break
+
+        finally:
+            # Asegura cerrar el puerto serie correctamente al salir con ESC o interrupción
+            if self.serial_bridge:
+                self.serial_bridge.close()
+            self.camera.release()
+            cv2.destroyAllWindows()
+
+    def run_open_test(self):
+        """Runs the continuous live execution loop using camera feed and IMU targets."""
+        nav_manager = NavigationManager()
+        lap_tracker = LapTracker()
+
+        current_yaw = 0.0
+
+        try:
+            while True:                
+                frame = self.camera.read()
+                if frame is None:
+                    break
+
+                # 1. RETROALIMENTACIÓN: Leer el Yaw real que envía la ESP32 (si está disponible)
+                if self.serial_bridge:
+                    sensor_yaw = self.serial_bridge.read_current_yaw()
+                    if sensor_yaw is not None:
+                        current_yaw = sensor_yaw
+
+                # 2. Procesamiento de elementos de visión
+                pillars_color, pillars, pillar_mask = self.process_elements(
+                    frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
+                )
+                line_color, line, line_mask = self.process_elements(
+                    frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
+                )
+
+                line = self.process_navigation(
+                    line_color, line, nav_manager, lap_tracker
+                )
+
+                if nav_manager.direction:
+                    current_dir = (
+                        nav_manager.direction.value
+                        if isinstance(nav_manager.direction, Direction)
+                        else nav_manager.direction
+                    )
+                else:
+                    current_dir = "Clockwise"
+
+                # 3. Calcular target_yaw usando la pared y el current_yaw actual
+                walls, target_yaw, is_corner = self.process_walls(
+                    frame, current_dir, current_yaw
+                )
+
+                # 4. ENVIAR COMANDO A LA ESP32
+                if self.serial_bridge:
+                    self.serial_bridge.send_target_heading(target_yaw, is_corner)
+
+                print(
+                    f"Current Yaw: {current_yaw:.1f}° | Target Yaw: {target_yaw:.1f}° | Corner: {is_corner}"
+                )
+
+        except KeyboardInterrupt:
+            print("\nEjecución detenida manualmente por el usuario (Ctrl + C).")
 
         finally:
             # Asegura cerrar el puerto serie correctamente al salir con ESC o interrupción
