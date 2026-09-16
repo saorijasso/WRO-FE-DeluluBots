@@ -6,7 +6,8 @@ from config import saved_ranges
 from processing.transform_image import VisionUtils
 from processing.telemetry_display import TelemetryDisplay
 from navigation.direction_manager import Direction, NavigationManager, LapTracker
-from navigation.wall_follower_controller import WallFollowerController       
+from navigation.wall_follower_controller import WallFollowerController
+from vision.navigation.sign_navigation_controller import SignNavigation       
 
 
 class ImageManager:
@@ -119,9 +120,13 @@ class ImageManager:
             elements.append(element2)
         
         if len(elements) == 0:
-            return None, None, None
+            return None, None, None, None
 
         best_element = method(elements)
+        
+        # Validar si el método de selección devolvió None
+        if best_element is None:
+            return None, None, None, None
 
         result = frame.copy()
         result = TelemetryDisplay.draw_element(best_element, result)
@@ -129,7 +134,7 @@ class ImageManager:
 
         mask = VisionUtils.resize(best_element["mask"], 700, 350)
 
-        return best_element["color"], result, mask
+        return best_element["color"], result, mask, best_element
 
     def process_navigation(self, line_color, line, nav_manager, lap_tracker):
         """
@@ -299,9 +304,6 @@ class ImageManager:
                         current_yaw = sensor_yaw
 
                 # 2. Procesamiento de elementos de visión
-                pillars_color, pillars, pillar_mask = self.process_elements(
-                    frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
-                )
                 line_color, line, line_mask = self.process_elements(
                     frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
                 )
@@ -341,3 +343,81 @@ class ImageManager:
                 self.serial_bridge.close()
             self.camera.release()
             cv2.destroyAllWindows()
+
+    def run_obstacle_test(self):
+        nav_manager = NavigationManager()
+        sign_nav = SignNavigation(camera_fov_x=60.0)
+
+        current_yaw = 0.0
+        base_heading = 0.0
+        
+        # Anti-repetidor de esquina (cooldown en frames)
+        corner_cooldown = 0
+
+        try:
+            while True:
+                frame = self.camera.read()
+                if frame is None:
+                    break
+
+                if corner_cooldown > 0:
+                    corner_cooldown -= 1
+
+                # 1. IMU Feedback
+                if self.serial_bridge:
+                    sensor_yaw = self.serial_bridge.read_current_yaw()
+                    if sensor_yaw is not None:
+                        current_yaw = sensor_yaw
+
+                # 2. Pilares
+                pillars_color, pillar_frame, pillar_mask, target_pillar = self.process_elements(
+                    frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
+                )
+
+                # 3. Dirección
+                current_dir = (
+                    nav_manager.direction.value
+                    if isinstance(nav_manager.direction, Direction)
+                    else (nav_manager.direction or "Clockwise")
+                )
+
+                frame_width = frame.shape[1]
+
+                # 4. Navegación
+                if target_pillar is not None:
+                    target_yaw = sign_nav.calculate_avoidance_yaw(
+                        target_pillar, frame_width, base_heading
+                    )
+                    mode_str = f"Pilar ({target_pillar['color']})"
+
+                else:
+                    walls, wall_target_yaw, is_corner = self.process_walls(
+                        frame, current_dir, current_yaw
+                    )
+
+                    # Solo aceptamos giro de esquina si el cooldown ya venció
+                    if is_corner and corner_cooldown == 0:
+                        turn_step = -90 if current_dir == "Clockwise" else 90
+                        base_heading = (base_heading + turn_step) % 360
+                        target_yaw = base_heading
+                        
+                        # Bloqueamos la detección de esquinas por los próximos 30 frames (~1 seg)
+                        corner_cooldown = 30
+                        mode_str = f"Esquina -> Nuevo Heading: {base_heading}°"
+                    else:
+                        target_yaw = wall_target_yaw
+                        mode_str = "Paredes"
+
+                if self.serial_bridge:
+                    self.serial_bridge.send_target_heading(target_yaw)
+
+                print(
+                    f"Modo: {mode_str} | Base: {base_heading}° | Current: {current_yaw:.1f}° | Target: {target_yaw:.1f}°"
+                )
+
+        except KeyboardInterrupt:
+            print("\nPrueba de obstáculos detenida.")
+        finally:
+            if self.serial_bridge:
+                self.serial_bridge.close()
+            self.camera.release()

@@ -378,30 +378,35 @@ class VisionUtils:
 
         AREA_THRESHOLD = 0.15 #Maximum relative area difference to use vertical position as a tie breaker
 
-        if len(elements) == 0:
+        # Umbrales para ignorar el pilar cuando ya esté al lado del robot
+        MAX_AREA = 35000  # Ajustar según la resolución de tu cámara
+        MAX_Y_BOTTOM = 320 # Si la base del pilar baja de este valor en Y, ya lo rebasó
+
+        # Filtrar pilares que aún no han sido pasados
+        valid_elements = []
+        for el in elements:
+            bottom_y = el["y"] + el["h"]
+            if el["area"] < MAX_AREA and bottom_y < MAX_Y_BOTTOM:
+                valid_elements.append(el)
+
+        if len(valid_elements) == 0:
             return None
 
-        if len(elements) == 1:
-            return elements[0]
+        if len(valid_elements) == 1:
+            return valid_elements[0]
 
-        area1 = elements[0]["area"]
-        area2 = elements[1]["area"]
+        # Comparación entre dos pilares válidos
+        area1 = valid_elements[0]["area"]
+        area2 = valid_elements[1]["area"]
 
         difference = abs(area1 - area2) / max(area1, area2)
 
         if difference < AREA_THRESHOLD:
-            bottom1 = elements[0]["y"] + elements[0]["h"]
-            bottom2 = elements[1]["y"] + elements[1]["h"]
-
-            if bottom1 > bottom2:
-                return elements[0]
-            else:
-                return elements[1]
+            bottom1 = valid_elements[0]["y"] + valid_elements[0]["h"]
+            bottom2 = valid_elements[1]["y"] + valid_elements[1]["h"]
+            return valid_elements[0] if bottom1 > bottom2 else valid_elements[1]
         else:
-            if area1 > area2:
-                return elements[0]
-            else:
-                return elements[1]
+            return valid_elements[0] if area1 > area2 else valid_elements[1]
             
     @staticmethod
     def select_target_line(elements):
