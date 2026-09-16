@@ -311,7 +311,7 @@ class ImageManager:
                         current_yaw = sensor_yaw
 
                 # 2. PROCESAMIENTO DE LÍNEAS / NAVEGACIÓN
-                line_color, line, line_mask = self.process_elements(
+                line_color, line, line_mask, target_line = self.process_elements(
                     frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
                 )
 

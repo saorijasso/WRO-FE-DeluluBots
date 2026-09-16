@@ -27,7 +27,7 @@ class CrashDetector:
         check_y = self.pic_height - 60
 
         # Si el píxel es 0 (negro), hay pared justo enfrente
-        return bool(wall_mask[check_y, check_x] == 0)
+        return bool((wall_mask[check_y, check_x] == 0).any())
 
     def check_inner_wall_crash(self, wall_mask, direction):
         """
@@ -54,7 +54,8 @@ class CrashDetector:
 
         # Si CUALQUIERA de los puntos toca la pared (0), hay riesgo de choque interno
         for y, x in points:
-            if wall_mask[y, x] == 0:
+            # np.all(wall_mask[y, x] == 0) contempla tanto máscaras de 1 canal como BGR de 3 canales
+            if (wall_mask[y, x] == 0).all():
                 return True
 
         return False
