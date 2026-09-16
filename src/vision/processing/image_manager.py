@@ -7,6 +7,7 @@ from processing.transform_image import VisionUtils
 from processing.telemetry_display import TelemetryDisplay
 from navigation.direction_manager import Direction, NavigationManager, LapTracker
 from navigation.wall_follower_controller import WallFollowerController
+from vision.navigation.crash_detector import CrashDetector
 from vision.navigation.sign_navigation_controller import SignNavigation       
 
 
@@ -288,22 +289,28 @@ class ImageManager:
         """Runs the continuous live execution loop using camera feed and IMU targets."""
         nav_manager = NavigationManager()
         lap_tracker = LapTracker()
+        crash_detector = CrashDetector(pic_width=700, pic_height=350)
 
         current_yaw = 0.0
+        base_heading = 0.0
+        corner_cooldown = 0
 
         try:
-            while True:                
+            while True:
                 frame = self.camera.read()
                 if frame is None:
                     break
 
-                # 1. RETROALIMENTACIÓN: Leer el Yaw real que envía la ESP32 (si está disponible)
+                if corner_cooldown > 0:
+                    corner_cooldown -= 1
+
+                # 1. RETROALIMENTACIÓN IMU
                 if self.serial_bridge:
                     sensor_yaw = self.serial_bridge.read_current_yaw()
                     if sensor_yaw is not None:
                         current_yaw = sensor_yaw
 
-                # 2. Procesamiento de elementos de visión
+                # 2. PROCESAMIENTO DE LÍNEAS / NAVEGACIÓN
                 line_color, line, line_mask = self.process_elements(
                     frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
                 )
@@ -321,37 +328,74 @@ class ImageManager:
                 else:
                     current_dir = "Clockwise"
 
-                # 3. Calcular target_yaw usando la pared y el current_yaw actual
-                walls, target_yaw, is_corner = self.process_walls(
+                # 3. PROCESAMIENTO DE PAREDES
+                walls, wall_target_yaw, is_corner = self.process_walls(
                     frame, current_dir, current_yaw
                 )
 
-                # 4. ENVIAR COMANDO A LA ESP32
+                # 4. VERIFICACIÓN DE CHOQUES EN LA MÁSCARA
+                wall_mask = walls
+                outer_crash = crash_detector.check_outer_wall_crash(wall_mask)
+                inner_crash = crash_detector.check_inner_wall_crash(wall_mask, current_dir)
+
+                # =========================================================
+                # 5. JERARQUÍA DE DECISIÓN (PRUEBA ABIERTA)
+                # =========================================================
+
+                # --- PRIORIDAD 0: CHOQUE FRONTAL / EXTERIOR ---
+                if outer_crash:
+                    turn_step = -90 if current_dir == "Clockwise" else 90
+                    if corner_cooldown == 0:
+                        base_heading = (base_heading + turn_step) % 360
+                        corner_cooldown = 30
+                    target_yaw = base_heading
+                    mode_str = "ALERTA: Choque Frontal -> Giro Forzado!"
+
+                # --- PRIORIDAD 0.5: CHOQUE EN PARED INTERNA ---
+                elif inner_crash:
+                    avoid_offset = -15 if current_dir == "Clockwise" else 15
+                    target_yaw = (current_yaw + avoid_offset) % 360
+                    mode_str = "ALERTA: Corrigiendo Pared Interna"
+
+                # --- PRIORIDAD 1: ESQUINA DETECTADA POR VISIÓN ---
+                elif is_corner and corner_cooldown == 0:
+                    turn_step = -90 if current_dir == "Clockwise" else 90
+                    base_heading = (base_heading + turn_step) % 360
+                    target_yaw = base_heading
+                    corner_cooldown = 30
+                    mode_str = f"Esquina -> Nuevo Heading: {base_heading}°"
+
+                # --- PRIORIDAD 2: SEGUIMIENTO NORMAL DE PAREDES ---
+                else:
+                    target_yaw = wall_target_yaw
+                    mode_str = "Paredes"
+
+                # 6. ENVIAR COMANDO A LA ESP32
                 if self.serial_bridge:
                     self.serial_bridge.send_target_heading(target_yaw, is_corner)
 
                 print(
-                    f"Current Yaw: {current_yaw:.1f}° | Target Yaw: {target_yaw:.1f}° | Corner: {is_corner}"
+                    f"Modo: {mode_str} | Base: {base_heading}° | Current: {current_yaw:.1f}° | Target: {target_yaw:.1f}° | Corner: {is_corner}"
                 )
 
         except KeyboardInterrupt:
             print("\nEjecución detenida manualmente por el usuario (Ctrl + C).")
 
         finally:
-            # Asegura cerrar el puerto serie correctamente al salir con ESC o interrupción
             if self.serial_bridge:
                 self.serial_bridge.close()
             self.camera.release()
             cv2.destroyAllWindows()
 
+
     def run_obstacle_test(self):
         nav_manager = NavigationManager()
         sign_nav = SignNavigation(camera_fov_x=60.0)
+        wall_controller = WallFollowerController(pic_width=700, pic_height=350)
+        crash_detector = CrashDetector(pic_width=700, pic_height=350)
 
         current_yaw = 0.0
         base_heading = 0.0
-        
-        # Anti-repetidor de esquina (cooldown en frames)
         corner_cooldown = 0
 
         try:
@@ -363,51 +407,74 @@ class ImageManager:
                 if corner_cooldown > 0:
                     corner_cooldown -= 1
 
-                # 1. IMU Feedback
+                # 1. RETROALIMENTACIÓN IMU
                 if self.serial_bridge:
                     sensor_yaw = self.serial_bridge.read_current_yaw()
                     if sensor_yaw is not None:
                         current_yaw = sensor_yaw
 
-                # 2. Pilares
+                # 2. PROCESAMIENTO DE PILARES Y PAREDES (Procesamos todo primero)
                 pillars_color, pillar_frame, pillar_mask, target_pillar = self.process_elements(
                     frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
                 )
 
-                # 3. Dirección
                 current_dir = (
                     nav_manager.direction.value
                     if isinstance(nav_manager.direction, Direction)
                     else (nav_manager.direction or "Clockwise")
                 )
 
+                walls, wall_target_yaw, is_corner = self.process_walls(
+                    frame, current_dir, current_yaw
+                )
+
+                # 3. VERIFICACIÓN DE CHOQUES EN LA MÁSCARA
+                wall_mask = walls
+                outer_crash = crash_detector.check_outer_wall_crash(wall_mask)
+                inner_crash = crash_detector.check_inner_wall_crash(wall_mask, current_dir)
+
                 frame_width = frame.shape[1]
 
-                # 4. Navegación
-                if target_pillar is not None:
+                # =========================================================
+                # 4. JERARQUÍA DE DECISIÓN (ORDEN DE PRIORIDAD CORREGIDO)
+                # =========================================================
+
+                # --- PRIORIDAD 0: CHOQUE FRONTÁL / EXTERIOR ---
+                if outer_crash:
+                    turn_step = -90 if current_dir == "Clockwise" else 90
+                    if corner_cooldown == 0:
+                        base_heading = (base_heading + turn_step) % 360
+                        corner_cooldown = 30
+                    target_yaw = base_heading
+                    mode_str = "ALERTA: Choque Frontal -> Giro Forzado!"
+
+                # --- PRIORIDAD 0.5: CHOQUE EN PARED INTERNA ---
+                elif inner_crash:
+                    avoid_offset = -15 if current_dir == "Clockwise" else 15
+                    target_yaw = (current_yaw + avoid_offset) % 360
+                    mode_str = "ALERTA: Corrigiendo Pared Interna"
+
+                # --- PRIORIDAD 1: ESQUIVAR PILAR ---
+                elif target_pillar is not None:
                     target_yaw = sign_nav.calculate_avoidance_yaw(
                         target_pillar, frame_width, base_heading
                     )
                     mode_str = f"Pilar ({target_pillar['color']})"
 
+                # --- PRIORIDAD 2: ESQUINA DETECTADA ---
+                elif is_corner and corner_cooldown == 0:
+                    turn_step = -90 if current_dir == "Clockwise" else 90
+                    base_heading = (base_heading + turn_step) % 360
+                    target_yaw = base_heading
+                    corner_cooldown = 30
+                    mode_str = f"Esquina -> Nuevo Heading: {base_heading}°"
+
+                # --- PRIORIDAD 3: SEGUIMIENTO NORMAL DE PAREDES ---
                 else:
-                    walls, wall_target_yaw, is_corner = self.process_walls(
-                        frame, current_dir, current_yaw
-                    )
+                    target_yaw = wall_target_yaw
+                    mode_str = "Paredes"
 
-                    # Solo aceptamos giro de esquina si el cooldown ya venció
-                    if is_corner and corner_cooldown == 0:
-                        turn_step = -90 if current_dir == "Clockwise" else 90
-                        base_heading = (base_heading + turn_step) % 360
-                        target_yaw = base_heading
-                        
-                        # Bloqueamos la detección de esquinas por los próximos 30 frames (~1 seg)
-                        corner_cooldown = 30
-                        mode_str = f"Esquina -> Nuevo Heading: {base_heading}°"
-                    else:
-                        target_yaw = wall_target_yaw
-                        mode_str = "Paredes"
-
+                # 5. ENVIAR ÚNICAMENTE TARGET_YAW ABSOLUTO
                 if self.serial_bridge:
                     self.serial_bridge.send_target_heading(target_yaw)
 
