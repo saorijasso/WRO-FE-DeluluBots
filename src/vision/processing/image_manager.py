@@ -350,13 +350,13 @@ class ImageManager:
                 if (outer_crash or is_corner) and corner_cooldown == 0:
                     # Avanzamos al siguiente rumbo cardinal (0 -> 90 -> 180 -> 270)
                     base_heading = (base_heading + (turn_dir * 90)) % 360
-                    corner_cooldown = 120  # Cooldown para evitar falsos re-disparos mientras gira
+                    corner_cooldown = 150  # Cooldown para evitar falsos re-disparos mientras gira
                     mode_str = f"GIRO 90° -> Nuevo Rumbo Base: {base_heading}°"
 
                 # --- CASO B: ESQUIVAR PARED INTERNA (CORRECCIÓN TEMPORAL) ---
                 if inner_crash:
                     # Aplicamos un desvío temporal de 25° respecto al Rumbo Base
-                    avoid_offset = turn_dir * 25
+                    avoid_offset = turn_dir * 60
                     target_yaw = (base_heading + avoid_offset) % 360
                     mode_str = f"ALERTA: Corrigiendo Pared -> Target Temp: {target_yaw}°"
 
