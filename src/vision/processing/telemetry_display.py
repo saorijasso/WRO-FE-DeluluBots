@@ -1,3 +1,6 @@
+import os
+import time
+
 import cv2 
 
 class TelemetryDisplay: 
@@ -41,7 +44,7 @@ class TelemetryDisplay:
             return frame
 
     @staticmethod
-    def draw_hud (frame, lap_tracker=None, nav_manager=None):
+    def draw_hud (frame, lap_tracker=None, nav_manager=None, mode_str=""):
         """
         Draws the lap count (Lap 1, Lap 2, Lap 3) and the navigation direction
         onto the camera frame
@@ -85,5 +88,52 @@ class TelemetryDisplay:
         cv2.putText(frame, dir_text_label, (31, 101), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, dir_text_label, (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2, cv2.LINE_AA)
 
+        if mode_str:
+            cv2.putText(frame, f"Modo: {mode_str}", (31, frame.shape[0] - 19), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, f"Modo: {mode_str}", (30, frame.shape[0] - 20), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+
         return frame
-    
+
+class VideoWriterLogger:
+    """Clase sencilla para guardar los frames en un archivo .avi"""
+
+    def __init__(
+        self,
+        output_dir="logs_video",
+        fps=20.0,
+        frame_size=(700, 350),
+        enabled=True,
+    ):
+        self.frame_size = frame_size
+        self.enabled = enabled
+        self.writer = None
+        if self.enabled:
+            os.makedirs(output_dir, exist_ok=True)
+            filename = os.path.join(
+                output_dir, f"run_{time.strftime('%Y%m%d_%H%M%S')}.avi"
+            )
+            fourcc = cv2.VideoWriter_fourcc(*"XVID")
+            self.writer = cv2.VideoWriter(filename, fourcc, fps, frame_size)
+            print(f"[VideoLogger] Grabando video en: {filename}")
+
+    def write(self, frame):
+        if frame is None or self.writer is None:
+            return
+
+        # 1. Si la imagen viene en escala de grises (2D), convertir a BGR (3D)
+        if len(frame.shape) == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+        # 2. Redimensionar usando self.frame_size directamente
+        target_w, target_h = self.frame_size
+        if (frame.shape[1], frame.shape[0]) != (target_w, target_h):
+            frame = cv2.resize(frame, (target_w, target_h))
+
+        self.writer.write(frame)
+
+    def release(self):
+        if self.writer:
+            self.writer.release()
+            print("[VideoLogger] Grabación finalizada y guardada.")

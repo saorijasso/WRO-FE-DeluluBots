@@ -4,7 +4,7 @@ from camera.camera import Camera
 from comms.ESP32bridge import ESP32Bridge
 from config import saved_ranges
 from processing.transform_image import VisionUtils
-from processing.telemetry_display import TelemetryDisplay
+from processing.telemetry_display import TelemetryDisplay, VideoWriterLogger
 from navigation.direction_manager import Direction, NavigationManager, LapTracker
 from navigation.wall_follower_controller import WallFollowerController
 from vision.navigation.crash_detector import CrashDetector
@@ -290,6 +290,9 @@ class ImageManager:
         nav_manager = NavigationManager()
         lap_tracker = LapTracker()
         crash_detector = CrashDetector(pic_width=700, pic_height=350)
+        video_logger = VideoWriterLogger(
+            output_dir="logs_video", fps=20.0, frame_size=(700, 350)
+        )
 
         current_yaw = 0.0
         base_heading = 0.0
@@ -378,10 +381,24 @@ class ImageManager:
                     f"Modo: {mode_str} | Base: {base_heading}° | Current: {current_yaw:.1f}° | Target: {target_yaw:.1f}° | Corner: {is_corner}"
                 )
 
+                # =========================================================
+                # 7. DIBUJAR ANOTACIONES Y GUARDAR EN VIDEO (¡AQUÍ VA!)
+                # =========================================================
+                # Dibujamos las anotaciones sobre el frame
+                frame = crash_detector.draw_debug_points(frame, current_dir)
+                frame = TelemetryDisplay.draw_element(target_line, frame)
+                frame = TelemetryDisplay.draw_hud(frame, lap_tracker, nav_manager, mode_str=mode_str)
+
+                # Guardamos el frame ya pintado en el archivo de video
+                video_logger.write(frame)
+
         except KeyboardInterrupt:
             print("\nEjecución detenida manualmente por el usuario (Ctrl + C).")
 
         finally:
+            # Aseguramos cerrar la grabación para que el archivo .avi no quede corrupto
+            video_logger.release()
+
             if self.serial_bridge:
                 self.serial_bridge.close()
             self.camera.release()
@@ -393,6 +410,11 @@ class ImageManager:
         sign_nav = SignNavigation(camera_fov_x=60.0)
         wall_controller = WallFollowerController(pic_width=700, pic_height=350)
         crash_detector = CrashDetector(pic_width=700, pic_height=350)
+
+        # 1. Inicializar el grabador de video
+        video_logger = VideoWriterLogger(
+            output_dir="logs_video", fps=20.0, frame_size=(700, 350)
+        )
 
         current_yaw = 0.0
         base_heading = 0.0
@@ -414,8 +436,13 @@ class ImageManager:
                         current_yaw = sensor_yaw
 
                 # 2. PROCESAMIENTO DE PILARES Y PAREDES (Procesamos todo primero)
-                pillars_color, pillar_frame, pillar_mask, target_pillar = self.process_elements(
-                    frame, ["Red", "Green"], 500, VisionUtils.select_target_pillar
+                pillars_color, pillar_frame, pillar_mask, target_pillar = (
+                    self.process_elements(
+                        frame,
+                        ["Red", "Green"],
+                        500,
+                        VisionUtils.select_target_pillar,
+                    )
                 )
 
                 current_dir = (
@@ -431,7 +458,9 @@ class ImageManager:
                 # 3. VERIFICACIÓN DE CHOQUES EN LA MÁSCARA
                 wall_mask = walls
                 outer_crash = crash_detector.check_outer_wall_crash(wall_mask)
-                inner_crash = crash_detector.check_inner_wall_crash(wall_mask, current_dir)
+                inner_crash = crash_detector.check_inner_wall_crash(
+                    wall_mask, current_dir
+                )
 
                 frame_width = frame.shape[1]
 
@@ -439,7 +468,7 @@ class ImageManager:
                 # 4. JERARQUÍA DE DECISIÓN (ORDEN DE PRIORIDAD CORREGIDO)
                 # =========================================================
 
-                # --- PRIORIDAD 0: CHOQUE FRONTÁL / EXTERIOR ---
+                # --- PRIORIDAD 0: CHOQUE FRONTAL / EXTERIOR ---
                 if outer_crash:
                     turn_step = -90 if current_dir == "Clockwise" else 90
                     if corner_cooldown == 0:
@@ -482,9 +511,30 @@ class ImageManager:
                     f"Modo: {mode_str} | Base: {base_heading}° | Current: {current_yaw:.1f}° | Target: {target_yaw:.1f}°"
                 )
 
+                # =========================================================
+                # 6. DIBUJAR ANOTACIONES Y GUARDAR EN VIDEO
+                # =========================================================
+                # Dibujar bumpers de colisión
+                frame = crash_detector.draw_debug_points(frame, current_dir)
+
+                # Dibujar bounding box del pilar detectado (Rojo o Verde)
+                frame = TelemetryDisplay.draw_element(target_pillar, frame)
+
+                # Dibujar HUD (vueltas, dirección y modo)
+                frame = TelemetryDisplay.draw_hud(
+                    frame, nav_manager=nav_manager, mode_str=mode_str
+                )
+
+                # Escribir frame en el archivo .avi
+                video_logger.write(frame)
+
         except KeyboardInterrupt:
             print("\nPrueba de obstáculos detenida.")
         finally:
+            # Cerrar el grabador para conservar el archivo
+            video_logger.release()
+
             if self.serial_bridge:
                 self.serial_bridge.close()
             self.camera.release()
+            cv2.destroyAllWindows()
