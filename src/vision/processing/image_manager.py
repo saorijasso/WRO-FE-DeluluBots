@@ -344,13 +344,13 @@ class ImageManager:
                 # =========================================================
                 # 5. JERARQUÍA DE DECISIÓN (PRUEBA ABIERTA)
                 # =========================================================
-                turn_dir = -1 if current_dir == "Clockwise" else 1
+                turn_dir = 1 if current_dir == "Clockwise" else -1
 
                 # --- CASO A: DETECCIÓN DE ESQUINA O CHOQUE FRONTAL (CAMBIO DE BASE HEADING) ---
                 if (outer_crash or is_corner) and corner_cooldown == 0:
                     # Avanzamos al siguiente rumbo cardinal (0 -> 90 -> 180 -> 270)
                     base_heading = (base_heading + (turn_dir * 90)) % 360
-                    corner_cooldown = 25  # Cooldown para evitar falsos re-disparos mientras gira
+                    corner_cooldown = 120  # Cooldown para evitar falsos re-disparos mientras gira
                     mode_str = f"GIRO 90° -> Nuevo Rumbo Base: {base_heading}°"
 
                 # --- CASO B: ESQUIVAR PARED INTERNA (CORRECCIÓN TEMPORAL) ---
