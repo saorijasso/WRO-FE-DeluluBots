@@ -344,35 +344,33 @@ class ImageManager:
                 # =========================================================
                 # 5. JERARQUÍA DE DECISIÓN (PRUEBA ABIERTA)
                 # =========================================================
+                turn_dir = -1 if current_dir == "Clockwise" else 1
 
-                # --- PRIORIDAD 0: CHOQUE FRONTAL / EXTERIOR ---
-                if outer_crash:
-                    turn_step = -90 if current_dir == "Clockwise" else 90
-                    if corner_cooldown == 0:
-                        base_heading = (base_heading + turn_step) % 360
-                        corner_cooldown = 30
-                    target_yaw = base_heading
-                    mode_str = "ALERTA: Choque Frontal -> Giro Forzado!"
+                # --- CASO A: DETECCIÓN DE ESQUINA O CHOQUE FRONTAL (CAMBIO DE BASE HEADING) ---
+                if (outer_crash or is_corner) and corner_cooldown == 0:
+                    # Avanzamos al siguiente rumbo cardinal (0 -> 90 -> 180 -> 270)
+                    base_heading = (base_heading + (turn_dir * 90)) % 360
+                    corner_cooldown = 25  # Cooldown para evitar falsos re-disparos mientras gira
+                    mode_str = f"GIRO 90° -> Nuevo Rumbo Base: {base_heading}°"
 
-                # --- PRIORIDAD 0.5: CHOQUE EN PARED INTERNA ---
-                elif inner_crash:
-                    avoid_offset = -15 if current_dir == "Clockwise" else 15
-                    target_yaw = (current_yaw + avoid_offset) % 360
-                    mode_str = "ALERTA: Corrigiendo Pared Interna"
+                # --- CASO B: ESQUIVAR PARED INTERNA (CORRECCIÓN TEMPORAL) ---
+                if inner_crash:
+                    # Aplicamos un desvío temporal de 25° respecto al Rumbo Base
+                    avoid_offset = turn_dir * 25
+                    target_yaw = (base_heading + avoid_offset) % 360
+                    mode_str = f"ALERTA: Corrigiendo Pared -> Target Temp: {target_yaw}°"
 
-                # --- PRIORIDAD 1: ESQUINA DETECTADA POR VISIÓN ---
-                elif is_corner and corner_cooldown == 0:
-                    turn_step = -90 if current_dir == "Clockwise" else 90
-                    base_heading = (base_heading + turn_step) % 360
-                    target_yaw = base_heading
-                    corner_cooldown = 30
-                    mode_str = f"Esquina -> Nuevo Heading: {base_heading}°"
-
-                # --- PRIORIDAD 2: SEGUIMIENTO NORMAL DE PAREDES ---
+                # --- CASO C: NAVEGACIÓN NORMAL (REGRESA Y MANTIENE EL RUMBO BASE) ---
                 else:
-                    target_yaw = wall_target_yaw
-                    mode_str = "Paredes"
-
+                    # Si la pared nos da un ajuste fino, lo sumamos al base_heading (máximo +-12°)
+                    wall_offset = wall_target_yaw - current_yaw
+                    # Normalizar offset entre -180 y 180
+                    wall_offset = (wall_offset + 180) % 360 - 180
+                    wall_offset = max(-12.0, min(12.0, wall_offset)) # Límite de seguridad
+                    
+                    # El Target SIEMPRE orbita alrededor del base_heading
+                    target_yaw = (base_heading + wall_offset) % 360
+                    mode_str = f"Navegando a Base: {base_heading}°"
                 # 6. ENVIAR COMANDO A LA ESP32
                 if self.serial_bridge:
                     self.serial_bridge.send_target_heading(target_yaw, is_corner)
