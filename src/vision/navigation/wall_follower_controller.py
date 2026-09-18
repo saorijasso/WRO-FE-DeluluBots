@@ -17,7 +17,7 @@ class WallFollowerController:
         direction,
         base_heading,
         threshold=480,
-        trigger_y=220,  # <-- Altura Y (en píxeles) equivalente a la posición del punto azul
+        trigger_y=100,  # <-- Altura Y (en píxeles) equivalente a la posición del punto azul
     ):
 
         """
