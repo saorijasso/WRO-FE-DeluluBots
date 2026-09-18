@@ -95,7 +95,7 @@ class LapTracker:
 
     TOTAL_LAPS = 3
     CORNERS_PER_LAP = 4
-    DEBOUNCE_SECONDS = 1.5
+    DEBOUNCE_SECONDS = 6
 
     def __init__(self, direction=None):
         """
