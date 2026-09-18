@@ -26,9 +26,14 @@ class ImageManager:
         Initializes the camera and creates the display windows.
         """
 
+        self.pic_width = 700
+        self.pic_height = 350
         self.camera = Camera()
-        self.wall_follower = WallFollowerController(pic_width=700, pic_height=350)
+        self.wall_follower = WallFollowerController(
+            pic_width=self.pic_width, pic_height=self.pic_height
+        )
         self.serial_bridge = ESP32Bridge()
+
 
     def process_walls(self, frame, direction, base_heading):
         """
