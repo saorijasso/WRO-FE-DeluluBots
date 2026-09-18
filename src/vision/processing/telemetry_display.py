@@ -44,7 +44,7 @@ class TelemetryDisplay:
             return frame
 
     @staticmethod
-    def draw_hud (frame, lap_tracker=None, nav_manager=None, mode_str=""):
+    def draw_hud (frame, lap_tracker=None, nav_manager=None, mode_str="", extra_lines = None):
         """
         Draws the lap count (Lap 1, Lap 2, Lap 3) and the navigation direction
         onto the camera frame
@@ -57,9 +57,19 @@ class TelemetryDisplay:
         Returns:
             numpy.ndarray: Frame with the telemetry HUD rendered.
         """
-        current_lap = lap_tracker.current_lap if lap_tracker else 1
         total_laps = lap_tracker.TOTAL_LAPS if lap_tracker else 3
+
+        if lap_tracker:
+            # current_lap cuenta vueltas COMPLETADAS; mostramos la que va en curso.
+            if lap_tracker.finished:
+                current_lap = total_laps
+            else:
+                current_lap = min(lap_tracker.current_lap + 1, total_laps)
+        else:
+            current_lap = 1
+
         lap_text = f"Lap: {current_lap} / {total_laps}"
+
 
         if lap_tracker:
             total_corners = lap_tracker.corners
@@ -93,6 +103,15 @@ class TelemetryDisplay:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(frame, f"Modo: {mode_str}", (30, frame.shape[0] - 20), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+
+        if extra_lines:
+            y = 130
+            for text in extra_lines:
+                cv2.putText(frame, text, (31, y + 1), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6, (0, 0, 0), 3, cv2.LINE_AA)
+                cv2.putText(frame, text, (30, y), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6, (255, 255, 255), 2, cv2.LINE_AA)
+                y += 24
 
         return frame
 

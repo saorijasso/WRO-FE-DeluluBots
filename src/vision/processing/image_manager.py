@@ -355,7 +355,18 @@ class ImageManager:
 
                 # 7. Debug view: draw the ROI on the mask so you can tune it live
                 walls_dbg = corner_detector.draw(walls_dbg, current_dir, info)
+                walls_dbg = TelemetryDisplay.draw_hud(
+                    walls_dbg,
+                    lap_tracker=lap_tracker,
+                    nav_manager=nav_manager,
+                    mode_str=mode_str,
+                    extra_lines=[
+                        f"ROI {info['ratio']:.2f}  armed {info['armed']}",
+                        f"Yaw {current_yaw:.0f} -> {target_yaw:.0f}",
+                    ],
+                )
                 video_logger.write(walls_dbg)
+
 
                 if not HEADLESS:
                     cv2.imshow("Walls + ROI", walls_dbg)
