@@ -355,8 +355,8 @@ class ImageManager:
 
                 # --- CASO B: ESQUIVAR PARED INTERNA (CORRECCIÓN TEMPORAL) ---
                 if inner_crash:
-                    # Aplicamos un desvío temporal de 25° respecto al Rumbo Base
-                    avoid_offset = turn_dir * 60
+                    # Aplicamos un desvío temporal de 35° respecto al Rumbo Base
+                    avoid_offset = turn_dir * 35
                     target_yaw = (base_heading + avoid_offset) % 360
                     mode_str = f"ALERTA: Corrigiendo Pared -> Target Temp: {target_yaw}°"
 
