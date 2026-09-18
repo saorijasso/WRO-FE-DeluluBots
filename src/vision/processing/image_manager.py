@@ -1,4 +1,5 @@
 import time
+import os
 
 import cv2
 
@@ -15,7 +16,9 @@ from vision.navigation.wall_follower_controller import WallFollowerController
 from vision.processing.telemetry_display import VideoWriterLogger
 from vision.processing.transform_image import VisionUtils
 from vision.navigation.crash_detector import CrashDetector
-from vision.navigation.sign_navigation_controller import SignNavigation       
+from vision.navigation.sign_navigation_controller import SignNavigation
+
+HEADLESS = not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 YAW_CW_SIGN = +1
 
@@ -352,12 +355,14 @@ class ImageManager:
 
                 # 7. Debug view: draw the ROI on the mask so you can tune it live
                 walls_dbg = corner_detector.draw(walls_dbg, current_dir, info)
-                cv2.imshow("Walls + ROI", walls_dbg)
                 video_logger.write(walls_dbg)
 
+                if not HEADLESS:
+                    cv2.imshow("Walls + ROI", walls_dbg)
+                    if cv2.waitKey(1) == 27:
+                        break
+
                 if lap_tracker.finished:
-                    break
-                if cv2.waitKey(1) == 27:
                     break
 
         except KeyboardInterrupt:
@@ -367,7 +372,8 @@ class ImageManager:
             if self.serial_bridge:
                 self.serial_bridge.close()
             self.camera.release()
-            cv2.destroyAllWindows()
+            if not HEADLESS:
+                cv2.destroyAllWindows()
 
 
     def run_obstacle_test(self):
