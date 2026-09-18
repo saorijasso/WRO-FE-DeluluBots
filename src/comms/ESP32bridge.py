@@ -31,16 +31,20 @@ class ESP32Bridge:
             except serial.SerialException as e:
                 print(f"[Serial Error] Failed to send data: {e}")
 
-    def read_current_yaw(self) -> float:
-        """Reads real-time Yaw orientation sent by the ESP32."""
-        if self.ser and self.ser.is_open and self.ser.in_waiting > 0:
+    def read_current_yaw(self):
+        """Reads every pending line and returns the most recent valid yaw."""
+        if not (self.ser and self.ser.is_open):
+            return None
+
+        latest = None
+        while self.ser.in_waiting > 0:
             try:
-                line = self.ser.readline().decode('utf-8').strip()
+                line = self.ser.readline().decode("utf-8").strip()
                 if line:
-                    return float(line)
+                    latest = float(line)
             except (ValueError, UnicodeDecodeError):
-                pass
-        return None  # Retorna None si no hay lectura válida
+                continue
+        return latest
 
     def close(self):
         """Closes the serial port gracefully."""

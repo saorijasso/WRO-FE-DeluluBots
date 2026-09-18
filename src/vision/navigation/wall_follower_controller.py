@@ -1,3 +1,6 @@
+from vision.navigation.corner_roi_detector import is_clockwise
+
+
 class WallFollowerController:
 
     """
@@ -10,52 +13,17 @@ class WallFollowerController:
         self.pic_height = pic_height
         self.old_p_adjust = 0.0
 
-    def calculate_target_yaw(
-        self,
-        avg_x,
-        avg_y,
-        direction,
-        base_heading,
-        threshold=480,
-        trigger_y=100,  # <-- Altura Y (en píxeles) equivalente a la posición del punto azul
-    ):
+    def calculate_target_yaw(self, avg_x, avg_y, direction, base_heading,
+                         threshold=480, gain=0.05, max_offset=12.0):
+        """Returns target_yaw only: base_heading plus a clamped wall-following offset."""
+        if avg_x is None or avg_y is None:
+            return base_heading
 
-        """
-        Calcula el target_yaw sumando un offset suave al base_heading activo.
-        Dispara 'is_corner' únicamente cuando la pared/línea alcanza la altura Y de referencia.
-        """
+        cw = is_clockwise(direction)
+        new_avg_x = (self.pic_width - avg_x) if cw else avg_x
 
-        # Si no hay detección (avg_x/y son None o 0), no hay corner
-        if avg_x is None or avg_y is None or (avg_x == 0 and avg_y == 0):
-            return base_heading, False
+        p_adjust = avg_y + new_avg_x - threshold
+        angle_offset = (p_adjust * gain) * (-1.0 if cw else 1.0)
+        angle_offset = max(-max_offset, min(max_offset, angle_offset))
 
-        # 1. Normalización X según sentido de pista
-        new_avg_x = (
-            avg_x
-            if direction == "CounterClockwise"
-            else (self.pic_width - avg_x)
-        )
-
-        # 2. DETECCIÓN DE ESQUINA DIRECTA POR ALTURA (PUNTO AZUL)
-        # Cuando avg_y sobrepasa el punto de disparo en pantalla, llegamos a la esquina
-        is_corner = avg_y >= trigger_y
-
-        if is_corner:
-            # En esquina devolvemos la intención de girar 90° al nuevo rumbo cardinal
-            turn_step = 90 if direction == "CounterClockwise" else -90
-            target_yaw = (base_heading + turn_step) % 360
-        else:
-            # 3. CORRECCIÓN EN RECTA (Offset suave amarrado al base_heading)
-            p_adjust = avg_y + new_avg_x - threshold
-
-            angle_offset = (p_adjust * 0.05) * (
-                -1 if direction == "Clockwise" else 1
-            )
-
-            # Clamp de seguridad: máximo +-12° de desviación sobre la recta
-            angle_offset = max(-12.0, min(12.0, angle_offset))
-
-            # El target NUNCA pierde el base_heading objetivo
-            target_yaw = (base_heading + angle_offset) % 360
-
-        return target_yaw, is_corner 
+        return (base_heading + angle_offset) % 360 

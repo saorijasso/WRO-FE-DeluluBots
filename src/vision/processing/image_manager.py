@@ -1,3 +1,5 @@
+import time
+
 import cv2
 
 from camera.camera import Camera
@@ -6,10 +8,16 @@ from config import saved_ranges
 from processing.transform_image import VisionUtils
 from processing.telemetry_display import TelemetryDisplay, VideoWriterLogger
 from navigation.direction_manager import Direction, NavigationManager, LapTracker
-from navigation.wall_follower_controller import WallFollowerController
+from vision.config import saved_ranges
+from vision.navigation.corner_roi_detector import CornerROIDetector, angle_diff, build_wall_mask, is_clockwise, wall_follow_point
+from vision.navigation.direction_manager import LapTracker, NavigationManager
+from vision.navigation.wall_follower_controller import WallFollowerController
+from vision.processing.telemetry_display import VideoWriterLogger
+from vision.processing.transform_image import VisionUtils
 from vision.navigation.crash_detector import CrashDetector
 from vision.navigation.sign_navigation_controller import SignNavigation       
 
+YAW_CW_SIGN = +1
 
 class ImageManager:
 
@@ -22,67 +30,34 @@ class ImageManager:
         self.wall_follower = WallFollowerController(pic_width=700, pic_height=350)
         self.serial_bridge = ESP32Bridge()
 
-    def process_walls(self, frame, direction, current_yaw):
+    def process_walls(self, frame, direction, base_heading):
         """
-        Processes image frame to track wall boundaries and compute target IMU heading.
-
-        Args:
-            frame (numpy.ndarray): Input camera frame in BGR format.
-            direction (str): Driving direction ("Clockwise" or "CounterClockwise").
-            current_yaw (float): Current Yaw orientation angle from IMU in degrees.
-
         Returns:
-            tuple:
-                - numpy.ndarray: Rendered image with visual telemetry overlays.
-                - float: Calculated target IMU Yaw angle in degrees (0 to 360).
-                - bool: True if an upcoming corner turn is detected, False otherwise.
+            (debug_bgr, wall_mask, target_yaw)
+            wall_mask: 255 = wall, 0 = floor
+            target_yaw: heading to hold while driving straight
         """
-        # Preprocessing pipeline
-        image = VisionUtils.replace_color(
-            frame, saved_ranges.color_ranges, ["Red", "Green"]
-        )
-        image = VisionUtils.resize(image, 700, 350)
-        image = VisionUtils.grayscale(image)
-        image = VisionUtils.blur(image)
-        image = VisionUtils.binary(image)
-        image = VisionUtils.clean_binary(image)
-        image = VisionUtils.keep_largest_white(image)
-
-        # Lateral wall centroid detection
-        avg_x, avg_y = VisionUtils.find_wall_to_follow(image, direction)
-
-        if avg_x is None or avg_y is None:
-            # If no wall is detected, keep current heading and do not force a corner
-            return None, current_yaw, False
-
-        # Physical corner detection
-        corner_x, corner_y = VisionUtils.find_real_corner(image, direction)
-
-        should_turn = corner_y > 200 if (corner_x is not None and corner_y is not None) else False
-
-        # Calculate target IMU heading via wall follower controller
-        target_yaw, pd_corner = self.wall_follower.calculate_target_yaw(
-            avg_x, avg_y, direction, current_yaw, threshold=480
+        wall_mask = build_wall_mask(
+            frame,
+            width=self.pic_width,
+            height=self.pic_height,
+            color_ranges=saved_ranges.color_ranges,
         )
 
-        # Combine corner detections (either physical vision corner or PD drop)
-        is_corner = should_turn or pd_corner
+        avg_x, avg_y = wall_follow_point(wall_mask, direction)
 
-        # Telemetry overlay drawing
-        result = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        debug = cv2.cvtColor(wall_mask, cv2.COLOR_GRAY2BGR)
 
-        # Wall tracking point (Yellow)
-        cv2.circle(result, (int(avg_x), int(avg_y)), 7, (0, 255, 255), -1)
+        if avg_x is None:
+            # No inner wall in sight: hold the cardinal heading, do not invent a turn.
+            return debug, wall_mask, base_heading
 
-        # Real corner point (Blue)
-        if corner_x is not None and corner_y is not None:
-            cv2.circle(result, (int(corner_x), int(corner_y)), 9, (255, 191, 0), -1)
+        target_yaw = self.wall_follower.calculate_target_yaw(
+            avg_x, avg_y, direction, base_heading
+        )
 
-        if is_corner:
-            cv2.putText(result, "TURNING NOW!", (50, 50), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-        return result, target_yaw, is_corner
+        cv2.circle(debug, (int(avg_x), int(avg_y)), 7, (0, 255, 255), -1)
+        return debug, wall_mask, target_yaw
 
     def process_elements(self, frame, colors, min_area, method):
         """
@@ -286,17 +261,28 @@ class ImageManager:
             cv2.destroyAllWindows()
 
     def run_open_test(self):
-        """Runs the continuous live execution loop using camera feed and IMU targets."""
         nav_manager = NavigationManager()
         lap_tracker = LapTracker()
-        crash_detector = CrashDetector(pic_width=700, pic_height=350)
+
+        corner_detector = CornerROIDetector(
+            pic_width=self.pic_width,
+            pic_height=self.pic_height,
+            mode="front_wall",   # "inner_floor" for the inner-wall variant
+            confirm_frames=3,
+            cooldown_s=2.0,
+        )
+
         video_logger = VideoWriterLogger(
-            output_dir="logs_video", fps=20.0, frame_size=(700, 350)
+            output_dir="logs_video", fps=20.0,
+            frame_size=(self.pic_width, self.pic_height),
         )
 
         current_yaw = 0.0
         base_heading = 0.0
-        corner_cooldown = 0
+        turning = False
+        turn_deadline = 0.0
+        TURN_TOLERANCE_DEG = 12.0
+        TURN_TIMEOUT_S = 3.0
 
         try:
             while True:
@@ -304,99 +290,75 @@ class ImageManager:
                 if frame is None:
                     break
 
-                if corner_cooldown > 0:
-                    corner_cooldown -= 1
+                now = time.time()
 
-                # 1. RETROALIMENTACIÓN IMU
+                # 1. IMU feedback (drain the buffer: keep only the newest yaw)
                 if self.serial_bridge:
                     sensor_yaw = self.serial_bridge.read_current_yaw()
                     if sensor_yaw is not None:
                         current_yaw = sensor_yaw
 
-                # 2. PROCESAMIENTO DE LÍNEAS / NAVEGACIÓN
+                # 2. Lines -> direction and lap counting
                 line_color, line, line_mask, target_line = self.process_elements(
                     frame, ["Orange", "Blue"], 200, VisionUtils.select_target_line
                 )
+                line = self.process_navigation(line_color, line, nav_manager, lap_tracker)
 
-                line = self.process_navigation(
-                    line_color, line, nav_manager, lap_tracker
+                current_dir = nav_manager.direction or "Clockwise"
+                turn_step = (90 if is_clockwise(current_dir) else -90) * YAW_CW_SIGN
+
+                # 3. Walls -> mask + straight-line steering target
+                walls_dbg, wall_mask, wall_target_yaw = self.process_walls(
+                    frame, current_dir, base_heading
                 )
 
-                if nav_manager.direction:
-                    current_dir = (
-                        nav_manager.direction.value
-                        if isinstance(nav_manager.direction, Direction)
-                        else nav_manager.direction
-                    )
+                # 4. Corner decision: ONE source of truth
+                info = corner_detector.update(wall_mask, current_dir, now=now)
+
+                # 5. Decision hierarchy
+                if info["corner"] and not turning:
+                    base_heading = (base_heading + turn_step) % 360
+                    turning = True
+                    turn_deadline = now + TURN_TIMEOUT_S
+                    mode_str = f"CORNER -> base {base_heading:.0f}"
+
+                if turning:
+                    # Commit to the cardinal heading until the turn is finished.
+                    target_yaw = base_heading
+                    err = abs(angle_diff(current_yaw, base_heading))
+                    if err < TURN_TOLERANCE_DEG or now > turn_deadline:
+                        turning = False
+                        corner_detector.reset()
+                    mode_str = f"TURNING -> {base_heading:.0f} (err {err:.0f})"
                 else:
-                    current_dir = "Clockwise"
+                    offset = angle_diff(wall_target_yaw, base_heading)
+                    offset = max(-12.0, min(12.0, offset))
+                    target_yaw = (base_heading + offset) % 360
+                    mode_str = f"STRAIGHT base {base_heading:.0f} off {offset:+.0f}"
 
-                # 3. PROCESAMIENTO DE PAREDES
-                walls, wall_target_yaw, is_corner = self.process_walls(
-                    frame, current_dir, current_yaw
-                )
-
-                # 4. VERIFICACIÓN DE CHOQUES EN LA MÁSCARA
-                wall_mask = walls
-                outer_crash = crash_detector.check_outer_wall_crash(wall_mask)
-                inner_crash = crash_detector.check_inner_wall_crash(wall_mask, current_dir)
-
-                # =========================================================
-                # 5. JERARQUÍA DE DECISIÓN (PRUEBA ABIERTA)
-                # =========================================================
-                turn_dir = 1 if current_dir == "Clockwise" else -1
-
-                # --- CASO A: DETECCIÓN DE ESQUINA O CHOQUE FRONTAL (CAMBIO DE BASE HEADING) ---
-                if (outer_crash or is_corner) and corner_cooldown == 0:
-                    # Avanzamos al siguiente rumbo cardinal (0 -> 90 -> 180 -> 270)
-                    base_heading = (base_heading + (turn_dir * 90)) % 360
-                    corner_cooldown = 150  # Cooldown para evitar falsos re-disparos mientras gira
-                    mode_str = f"GIRO 90° -> Nuevo Rumbo Base: {base_heading}°"
-
-                # --- CASO B: ESQUIVAR PARED INTERNA (CORRECCIÓN TEMPORAL) ---
-                if inner_crash:
-                    # Aplicamos un desvío temporal de 35° respecto al Rumbo Base
-                    avoid_offset = turn_dir * 35
-                    target_yaw = (base_heading + avoid_offset) % 360
-                    mode_str = f"ALERTA: Corrigiendo Pared -> Target Temp: {target_yaw}°"
-
-                # --- CASO C: NAVEGACIÓN NORMAL (REGRESA Y MANTIENE EL RUMBO BASE) ---
-                else:
-                    # Si la pared nos da un ajuste fino, lo sumamos al base_heading (máximo +-12°)
-                    wall_offset = wall_target_yaw - current_yaw
-                    # Normalizar offset entre -180 y 180
-                    wall_offset = (wall_offset + 180) % 360 - 180
-                    wall_offset = max(-12.0, min(12.0, wall_offset)) # Límite de seguridad
-                    
-                    # El Target SIEMPRE orbita alrededor del base_heading
-                    target_yaw = (base_heading + wall_offset) % 360
-                    mode_str = f"Navegando a Base: {base_heading}°"
-                # 6. ENVIAR COMANDO A LA ESP32
+                # 6. Command out
                 if self.serial_bridge:
-                    self.serial_bridge.send_target_heading(target_yaw, is_corner)
+                    self.serial_bridge.send_target_heading(target_yaw, info["corner"])
 
                 print(
-                    f"Modo: {mode_str} | Base: {base_heading}° | Current: {current_yaw:.1f}° | Target: {target_yaw:.1f}° | Corner: {is_corner}"
+                    f"{mode_str} | ratio {info['ratio']:.2f} armed {info['armed']} "
+                    f"cd {info['cooldown']:.1f} | cur {current_yaw:.1f} tgt {target_yaw:.1f}"
                 )
 
-                # =========================================================
-                # 7. DIBUJAR ANOTACIONES Y GUARDAR EN VIDEO (¡AQUÍ VA!)
-                # =========================================================
-                # Dibujamos las anotaciones sobre el frame
-                frame = crash_detector.draw_debug_points(frame, current_dir)
-                frame = TelemetryDisplay.draw_element(target_line, frame)
-                frame = TelemetryDisplay.draw_hud(frame, lap_tracker, nav_manager, mode_str=mode_str)
+                # 7. Debug view: draw the ROI on the mask so you can tune it live
+                walls_dbg = corner_detector.draw(walls_dbg, current_dir, info)
+                cv2.imshow("Walls + ROI", walls_dbg)
+                video_logger.write(walls_dbg)
 
-                # Guardamos el frame ya pintado en el archivo de video
-                video_logger.write(frame)
+                if lap_tracker.finished:
+                    break
+                if cv2.waitKey(1) == 27:
+                    break
 
         except KeyboardInterrupt:
-            print("\nEjecución detenida manualmente por el usuario (Ctrl + C).")
-
+            print("\nStopped by user (Ctrl + C).")
         finally:
-            # Aseguramos cerrar la grabación para que el archivo .avi no quede corrupto
             video_logger.release()
-
             if self.serial_bridge:
                 self.serial_bridge.close()
             self.camera.release()
