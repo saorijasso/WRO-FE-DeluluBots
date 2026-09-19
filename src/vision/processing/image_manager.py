@@ -15,7 +15,6 @@ from vision.navigation.direction_manager import LapTracker, NavigationManager
 from vision.navigation.wall_follower_controller import WallFollowerController
 from vision.processing.telemetry_display import VideoWriterLogger
 from vision.processing.transform_image import VisionUtils
-from vision.navigation.crash_detector import CrashDetector
 from vision.navigation.sign_navigation_controller import SignNavigation
 
 HEADLESS = not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
@@ -388,36 +387,66 @@ class ImageManager:
 
 
     def run_obstacle_test(self):
+        """Ejecuta el Obstacle Test sin abrir ventanas."""
         nav_manager = NavigationManager()
-        sign_nav = SignNavigation(camera_fov_x=60.0)
-        wall_controller = WallFollowerController(pic_width=700, pic_height=350)
-        crash_detector = CrashDetector(pic_width=700, pic_height=350)
 
-        # 1. Inicializar el grabador de video
+        direction_candidate = None
+        direction_votes = 0
+        direction_locked = False
+
+        DIRECTION_CONFIRM_FRAMES = 5
+        current_dir = None 
+
+        sign_nav = SignNavigation(camera_fov_x=60.0)
+
+        corner_detector = CornerROIDetector(
+            pic_width=self.pic_width,
+            pic_height=self.pic_height,
+            mode="front_wall",
+            confirm_frames=3,
+            cooldown_s=2.0,
+        )
+
         video_logger = VideoWriterLogger(
-            output_dir="logs_video", fps=20.0, frame_size=(700, 350)
+            output_dir="logs_video",
+            fps=20.0,
+            frame_size=(self.pic_width, self.pic_height),
         )
 
         current_yaw = 0.0
         base_heading = 0.0
-        corner_cooldown = 0
+
+        turning = False
+        turn_deadline = 0.0
+
+        TURN_TOLERANCE_DEG = 12.0
+        TURN_TIMEOUT_S = 3.0
+
+        PILLAR_CLEAR_FRAMES = 8
+        PILLAR_MIN_FRAMES = 8
+
+        avoiding_pillar = False
+        active_pillar = None
+        pillar_frames = 0
+        pillar_clear_frames = 0
 
         try:
             while True:
                 frame = self.camera.read()
+
                 if frame is None:
                     break
 
-                if corner_cooldown > 0:
-                    corner_cooldown -= 1
+                now = time.time()
 
-                # 1. RETROALIMENTACIÓN IMU
+                # Leer yaw actual
                 if self.serial_bridge:
                     sensor_yaw = self.serial_bridge.read_current_yaw()
+
                     if sensor_yaw is not None:
                         current_yaw = sensor_yaw
 
-                # 2. PROCESAMIENTO DE PILARES Y PAREDES (Procesamos todo primero)
+                # 1. Detectar pilares antes de tomar decisiones de pared
                 pillars_color, pillar_frame, pillar_mask, target_pillar = (
                     self.process_elements(
                         frame,
@@ -427,96 +456,225 @@ class ImageManager:
                     )
                 )
 
-                current_dir = (
-                    nav_manager.direction.value
-                    if isinstance(nav_manager.direction, Direction)
-                    else (nav_manager.direction or "Clockwise")
+                # Obtener máscara y objetivo de pared
+                walls_dbg, wall_mask, wall_target_yaw = self.process_walls(
+                    frame,
+                    current_dir,
+                    base_heading,
                 )
 
-                walls, wall_target_yaw, is_corner = self.process_walls(
-                    frame, current_dir, current_yaw
-                )
+                # Determinar la dirección usando el espacio libre.
+                # wall_mask: blanco = pared, negro = piso.
+                track_mask = cv2.bitwise_not(wall_mask)
 
-                # 3. VERIFICACIÓN DE CHOQUES EN LA MÁSCARA
-                wall_mask = walls
-                outer_crash = crash_detector.check_outer_wall_crash(wall_mask)
-                inner_crash = crash_detector.check_inner_wall_crash(
-                    wall_mask, current_dir
-                )
+                detected_direction = nav_manager.park_direction(track_mask)
 
-                frame_width = frame.shape[1]
-
-                # =========================================================
-                # 4. JERARQUÍA DE DECISIÓN (ORDEN DE PRIORIDAD CORREGIDO)
-                # =========================================================
-
-                # --- PRIORIDAD 0: CHOQUE FRONTAL / EXTERIOR ---
-                if outer_crash:
-                    turn_step = -90 if current_dir == "Clockwise" else 90
-                    if corner_cooldown == 0:
-                        base_heading = (base_heading + turn_step) % 360
-                        corner_cooldown = 30
-                    target_yaw = base_heading
-                    mode_str = "ALERTA: Choque Frontal -> Giro Forzado!"
-
-                # --- PRIORIDAD 0.5: CHOQUE EN PARED INTERNA ---
-                elif inner_crash:
-                    avoid_offset = -15 if current_dir == "Clockwise" else 15
-                    target_yaw = (current_yaw + avoid_offset) % 360
-                    mode_str = "ALERTA: Corrigiendo Pared Interna"
-
-                # --- PRIORIDAD 1: ESQUIVAR PILAR ---
-                elif target_pillar is not None:
-                    target_yaw = sign_nav.calculate_avoidance_yaw(
-                        target_pillar, frame_width, base_heading
-                    )
-                    mode_str = f"Pilar ({target_pillar['color']})"
-
-                # --- PRIORIDAD 2: ESQUINA DETECTADA ---
-                elif is_corner and corner_cooldown == 0:
-                    turn_step = -90 if current_dir == "Clockwise" else 90
-                    base_heading = (base_heading + turn_step) % 360
-                    target_yaw = base_heading
-                    corner_cooldown = 30
-                    mode_str = f"Esquina -> Nuevo Heading: {base_heading}°"
-
-                # --- PRIORIDAD 3: SEGUIMIENTO NORMAL DE PAREDES ---
+                if detected_direction == direction_candidate:
+                    direction_votes += 1
                 else:
-                    target_yaw = wall_target_yaw
-                    mode_str = "Paredes"
+                    direction_candidate = detected_direction
+                    direction_votes = 1
 
-                # 5. ENVIAR ÚNICAMENTE TARGET_YAW ABSOLUTO
+                if direction_votes >= DIRECTION_CONFIRM_FRAMES:
+                    nav_manager.direction = direction_candidate
+                    current_dir = direction_candidate.value
+                    direction_locked = True
+
+
+                # Entrar al estado de evasión cuando aparece un pilar
+                if not avoiding_pillar and target_pillar is not None:
+                    avoiding_pillar = True
+                    active_pillar = target_pillar.copy()
+                    pillar_frames = 0
+                    pillar_clear_frames = 0
+
+                    # Cancelar cualquier giro de pared pendiente
+                    turning = False
+                    corner_detector.reset()
+
+                elif avoiding_pillar and target_pillar is not None:
+                    active_pillar = target_pillar.copy()
+                    pillar_clear_frames = 0
+
+                if avoiding_pillar:
+                    pillar_frames += 1
+
+                    if target_pillar is None:
+                        pillar_clear_frames += 1
+
+                    # Mientras se evade el pilar, la pared queda ignorada
+                    info = {
+                        "corner": False,
+                        "ratio": corner_detector.last_ratio,
+                        "armed": False,
+                        "cooldown": 0.0,
+                    }
+
+                else:
+                    # El detector de esquinas solo trabaja fuera de la evasión
+                    if direction_locked:
+                        info = corner_detector.update(
+                            wall_mask,
+                            current_dir,
+                            now=now,
+                        )
+                    else:
+                        info = {
+                            "corner": False,
+                            "ratio": 0.0,
+                            "armed": False,
+                            "cooldown": 0.0,
+                        }
+
+                # =========================================================
+                # PRIORIDAD 1: EVASIÓN DEL PILAR
+                # =========================================================
+                if avoiding_pillar:
+
+                    if active_pillar is not None:
+                        target_yaw = sign_nav.calculate_avoidance_yaw(
+                            active_pillar,
+                            frame.shape[1],
+                            base_heading,
+                        )
+                    else:
+                        target_yaw = base_heading
+
+                    color = active_pillar["color"]
+
+                    side = (
+                        "DERECHA"
+                        if color == "Red"
+                        else "IZQUIERDA"
+                    )
+
+                    mode_str = f"EVITANDO {color} -> {side}"
+                    corner_command = False
+
+                    # Liberar el estado después de perder el pilar
+                    # durante varios frames consecutivos
+                    if (
+                        pillar_frames >= PILLAR_MIN_FRAMES
+                        and pillar_clear_frames >= PILLAR_CLEAR_FRAMES
+                    ):
+                        avoiding_pillar = False
+                        active_pillar = None
+                        pillar_frames = 0
+                        pillar_clear_frames = 0
+
+                        corner_detector.reset()
+
+                # =========================================================
+                # PRIORIDAD 2 Y 3: ESQUINAS Y PARED
+                # =========================================================
+                else:
+                    turn_step = (
+                        90 if is_clockwise(current_dir) else -90
+                    ) * YAW_CW_SIGN
+
+                    # Detectar esquina
+                    if info["corner"] and not turning:
+                        base_heading = (
+                            base_heading + turn_step
+                        ) % 360
+
+                        turning = True
+                        turn_deadline = now + TURN_TIMEOUT_S
+
+                    # Ejecutar giro
+                    if turning:
+                        target_yaw = base_heading
+
+                        error = abs(
+                            angle_diff(
+                                current_yaw,
+                                base_heading,
+                            )
+                        )
+
+                        if (
+                            error < TURN_TOLERANCE_DEG
+                            or now > turn_deadline
+                        ):
+                            turning = False
+                            corner_detector.reset()
+
+                        mode_str = (
+                            f"TURNING -> "
+                            f"{base_heading:.0f} "
+                            f"(error {error:.0f})"
+                        )
+
+                    # Seguir pared normalmente
+                    else:
+                        offset = angle_diff(
+                            wall_target_yaw,
+                            base_heading,
+                        )
+
+                        offset = max(
+                            -12.0,
+                            min(12.0, offset),
+                        )
+
+                        target_yaw = (
+                            base_heading + offset
+                        ) % 360
+
+                        mode_str = (
+                            f"PAREDES "
+                            f"base {base_heading:.0f} "
+                            f"offset {offset:+.0f}"
+                        )
+
+                    corner_command = info["corner"]
+
+                # Enviar heading absoluto
                 if self.serial_bridge:
-                    self.serial_bridge.send_target_heading(target_yaw)
+                    self.serial_bridge.send_target_heading(
+                        target_yaw,
+                        corner_command,
+                    )
 
                 print(
-                    f"Modo: {mode_str} | Base: {base_heading}° | Current: {current_yaw:.1f}° | Target: {target_yaw:.1f}°"
+                    f"Modo: {mode_str} | "
+                    f"Base: {base_heading:.0f}° | "
+                    f"Actual: {current_yaw:.1f}° | "
+                    f"Objetivo: {target_yaw:.1f}°"
                 )
 
-                # =========================================================
-                # 6. DIBUJAR ANOTACIONES Y GUARDAR EN VIDEO
-                # =========================================================
-                # Dibujar bumpers de colisión
-                frame = crash_detector.draw_debug_points(frame, current_dir)
-
-                # Dibujar bounding box del pilar detectado (Rojo o Verde)
-                frame = TelemetryDisplay.draw_element(target_pillar, frame)
-
-                # Dibujar HUD (vueltas, dirección y modo)
-                frame = TelemetryDisplay.draw_hud(
-                    frame, nav_manager=nav_manager, mode_str=mode_str
+                # Dibujar información sobre el video
+                walls_dbg = corner_detector.draw(
+                    walls_dbg,
+                    current_dir,
+                    info,
                 )
 
-                # Escribir frame en el archivo .avi
-                video_logger.write(frame)
+                walls_dbg = TelemetryDisplay.draw_hud(
+                    walls_dbg,
+                    nav_manager=nav_manager,
+                    mode_str=mode_str,
+                    extra_lines=[
+                        f"Pilar: {pillars_color or 'Ninguno'}",
+                        (
+                            f"Yaw {current_yaw:.0f} "
+                            f"-> {target_yaw:.0f}"
+                        ),
+                    ],
+                )
+
+                # Guardar video
+                video_logger.write(walls_dbg)
+
+                # No agregar imshow(), waitKey() ni destroyAllWindows()
 
         except KeyboardInterrupt:
             print("\nPrueba de obstáculos detenida.")
+
         finally:
-            # Cerrar el grabador para conservar el archivo
             video_logger.release()
 
             if self.serial_bridge:
                 self.serial_bridge.close()
+
             self.camera.release()
-            cv2.destroyAllWindows()

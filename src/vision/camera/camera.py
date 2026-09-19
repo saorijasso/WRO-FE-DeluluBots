@@ -2,7 +2,7 @@ import cv2
 
 class Camera:
 
-    def __init__(self, index=0):
+    def __init__(self, index=1):
         """
         Initializes the camera capture.
 
