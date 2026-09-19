@@ -99,7 +99,7 @@ def build_wall_mask(
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
     if auto_polarity:
-        strip = mask[int(height * 0.78):, int(width * 0.88):, int(width * 0.30):int(width * 0.70)]
+        strip = mask[int(height * 0.78):int(width * 0.88):, int(width * 0.30):int(width * 0.70)]
         if strip.size and float(np.count_nonzero(strip)) / strip.size > 0.80:
             mask = cv2.bitwise_not(mask)
 
