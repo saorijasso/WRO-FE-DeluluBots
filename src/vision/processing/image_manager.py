@@ -396,7 +396,7 @@ class ImageManager:
         direction_samples = 0
         direction_votes = {"Clockwise": 0, "Counter-Clockwise": 0}
         direction_objs = {}
-        DIRECTION_SAMPLE_FRAMES = 20
+        DIRECTION_SAMPLE_FRAMES = 60
         DIRECTION_MAX_FRAMES = 60
 
         corner_detector = CornerROIDetector(
@@ -430,8 +430,8 @@ class ImageManager:
         phase_frames = 0
         pillar_clear_frames = 0
 
-        PILLAR_STEER_DEG = 18.0
-        PILLAR_PASS_DEG = 12.0
+        PILLAR_STEER_DEG = 10.0
+        PILLAR_PASS_DEG = 7.0
         PILLAR_STEER_FRAMES = 6
         PILLAR_CLEAR_FRAMES = 8
         PILLAR_RECOVER_FRAMES = 10
