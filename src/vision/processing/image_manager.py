@@ -430,8 +430,8 @@ class ImageManager:
         phase_frames = 0
         pillar_clear_frames = 0
 
-        PILLAR_STEER_DEG = 10.0
-        PILLAR_PASS_DEG = 7.0
+        PILLAR_STEER_DEG = 18.0
+        PILLAR_PASS_DEG = 12.0
         PILLAR_STEER_FRAMES = 6
         PILLAR_CLEAR_FRAMES = 8
         PILLAR_RECOVER_FRAMES = 10
@@ -457,7 +457,7 @@ class ImageManager:
                     self.process_elements(
                         frame,
                         ["Red", "Green"],
-                        300,
+                        150,
                         VisionUtils.select_target_pillar,
                     )
                 )
