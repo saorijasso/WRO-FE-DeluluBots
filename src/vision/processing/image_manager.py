@@ -390,14 +390,14 @@ class ImageManager:
         """Ejecuta el Obstacle Test sin abrir ventanas."""
         nav_manager = NavigationManager()
 
-        direction_candidate = None
-        direction_votes = 0
+        # --- Direccion: se mide SOLO al inicio y queda congelada ---
+        current_dir = None
         direction_locked = False
-
-        DIRECTION_CONFIRM_FRAMES = 5
-        current_dir = None 
-
-        sign_nav = SignNavigation(camera_fov_x=60.0)
+        direction_samples = 0
+        direction_votes = {"Clockwise": 0, "Counter-Clockwise": 0}
+        direction_objs = {}
+        DIRECTION_SAMPLE_FRAMES = 20
+        DIRECTION_MAX_FRAMES = 60
 
         corner_detector = CornerROIDetector(
             pic_width=self.pic_width,
@@ -422,13 +422,19 @@ class ImageManager:
         TURN_TOLERANCE_DEG = 12.0
         TURN_TIMEOUT_S = 3.0
 
-        PILLAR_CLEAR_FRAMES = 8
-        PILLAR_MIN_FRAMES = 8
-
+        # --- Evasion del pilar en 3 fases ---
         avoiding_pillar = False
+        avoidance_phase = "NONE"
         active_pillar = None
-        pillar_frames = 0
+        avoidance_side = 0.0
+        phase_frames = 0
         pillar_clear_frames = 0
+
+        PILLAR_STEER_DEG = 18.0
+        PILLAR_PASS_DEG = 12.0
+        PILLAR_STEER_FRAMES = 6
+        PILLAR_CLEAR_FRAMES = 8
+        PILLAR_RECOVER_FRAMES = 10
 
         try:
             while True:
@@ -456,36 +462,79 @@ class ImageManager:
                     )
                 )
 
-                # Obtener máscara y objetivo de pared
+                # Mientras no hay direccion fijada se usa "Clockwise"
+                # solo para poder procesar la imagen.
+                processing_direction = (
+                    current_dir if direction_locked else "Clockwise"
+                )
+
+                # Obtener mascara y objetivo de pared
                 walls_dbg, wall_mask, wall_target_yaw = self.process_walls(
                     frame,
-                    current_dir,
+                    processing_direction,
                     base_heading,
                 )
 
-                # Determinar la dirección usando el espacio libre.
-                # wall_mask: blanco = pared, negro = piso.
-                track_mask = cv2.bitwise_not(wall_mask)
+                # 2. Direccion: SOLO durante los primeros frames.
+                #    Una vez fijada no se vuelve a medir nunca.
+                # 2. Direccion: SOLO durante los primeros frames.
+                #    Una vez fijada no se vuelve a medir nunca.
+                if not direction_locked:
+                    # wall_mask: blanco = pared, negro = piso.
+                    # park_direction necesita blanco = espacio libre.
+                    track_mask = cv2.bitwise_not(wall_mask)
+                    sampled = nav_manager.park_direction(track_mask)
 
-                detected_direction = nav_manager.park_direction(track_mask)
+                    # Comparar por texto: el enum puede venir de otro
+                    # modulo y entonces nunca coincide por identidad.
+                    sampled_value = getattr(sampled, "value", str(sampled))
 
-                if detected_direction == direction_candidate:
-                    direction_votes += 1
-                else:
-                    direction_candidate = detected_direction
-                    direction_votes = 1
+                    if sampled_value in direction_votes:
+                        direction_votes[sampled_value] += 1
+                        direction_objs[sampled_value] = sampled
+                        direction_samples += 1
 
-                if direction_votes >= DIRECTION_CONFIRM_FRAMES:
-                    nav_manager.direction = direction_candidate
-                    current_dir = direction_candidate.value
-                    direction_locked = True
+                    # No usar ni mostrar la direccion hasta confirmarla
+                    nav_manager.direction = None
 
+                    cw_votes = direction_votes["Clockwise"]
+                    ccw_votes = direction_votes["Counter-Clockwise"]
 
-                # Entrar al estado de evasión cuando aparece un pilar
+                    print(
+                        f"[DIR] muestra {direction_samples}"
+                        f"/{DIRECTION_SAMPLE_FRAMES} "
+                        f"-> {sampled_value} "
+                        f"(CW={cw_votes} CCW={ccw_votes})"
+                    )
+
+                    if direction_samples >= DIRECTION_SAMPLE_FRAMES:
+                        winner = (
+                            "Counter-Clockwise"
+                            if ccw_votes > cw_votes
+                            else "Clockwise"
+                        )
+
+                        current_dir = winner
+                        nav_manager.direction = direction_objs[winner]
+                        direction_locked = True
+
+                        print(
+                            f"[DIR] Direccion fijada: {current_dir} "
+                            f"(CW={cw_votes} CCW={ccw_votes})"
+                        )
+
+                 # 3. Entrar o mantenerse en la evasion del pilar
                 if not avoiding_pillar and target_pillar is not None:
                     avoiding_pillar = True
+                    avoidance_phase = "PILLAR_STEER"
                     active_pillar = target_pillar.copy()
-                    pillar_frames = 0
+
+                    # Rojo se pasa por la DERECHA, verde por la IZQUIERDA
+                    avoidance_side = (
+                        1.0 if target_pillar["color"] == "Red" else -1.0
+                    )
+
+                    phase_frames = 0
                     pillar_clear_frames = 0
 
                     # Cancelar cualquier giro de pared pendiente
@@ -496,8 +545,14 @@ class ImageManager:
                     active_pillar = target_pillar.copy()
                     pillar_clear_frames = 0
 
+                    # Si reaparece durante la recuperacion,
+                    # todavia no terminamos de rebasarlo.
+                    if avoidance_phase == "PILLAR_RECOVER":
+                        avoidance_phase = "PILLAR_PASS"
+                        phase_frames = 0
+
                 if avoiding_pillar:
-                    pillar_frames += 1
+                    phase_frames += 1
 
                     if target_pillar is None:
                         pillar_clear_frames += 1
@@ -527,42 +582,56 @@ class ImageManager:
                         }
 
                 # =========================================================
-                # PRIORIDAD 1: EVASIÓN DEL PILAR
+                # PRIORIDAD 1: EVASION DEL PILAR (3 fases)
                 # =========================================================
                 if avoiding_pillar:
-
-                    if active_pillar is not None:
-                        target_yaw = sign_nav.calculate_avoidance_yaw(
-                            active_pillar,
-                            frame.shape[1],
-                            base_heading,
-                        )
-                    else:
-                        target_yaw = base_heading
-
                     color = active_pillar["color"]
+                    side = "DERECHA" if avoidance_side > 0 else "IZQUIERDA"
 
-                    side = (
-                        "DERECHA"
-                        if color == "Red"
-                        else "IZQUIERDA"
-                    )
+                    if avoidance_phase == "PILLAR_STEER":
+                        target_yaw = (
+                            base_heading + avoidance_side * PILLAR_STEER_DEG
+                        ) % 360
+                        mode_str = f"PILLAR_STEER {color} -> {side}"
 
-                    mode_str = f"EVITANDO {color} -> {side}"
+                        if phase_frames >= PILLAR_STEER_FRAMES:
+                            avoidance_phase = "PILLAR_PASS"
+                            phase_frames = 0
+
+                    elif avoidance_phase == "PILLAR_PASS":
+                        target_yaw = (
+                            base_heading + avoidance_side * PILLAR_PASS_DEG
+                        ) % 360
+                        mode_str = f"PILLAR_PASS {color} -> {side}"
+
+                        if pillar_clear_frames >= PILLAR_CLEAR_FRAMES:
+                            avoidance_phase = "PILLAR_RECOVER"
+                            phase_frames = 0
+
+                    else:
+                        avoidance_phase = "PILLAR_RECOVER"
+                        target_yaw = base_heading
+                        mode_str = f"PILLAR_RECOVER {color}"
+
+                        if phase_frames >= PILLAR_RECOVER_FRAMES:
+                            avoiding_pillar = False
+                            avoidance_phase = "NONE"
+                            active_pillar = None
+                            avoidance_side = 0.0
+                            phase_frames = 0
+                            pillar_clear_frames = 0
+
+                            corner_detector.reset()
+
                     corner_command = False
 
-                    # Liberar el estado después de perder el pilar
-                    # durante varios frames consecutivos
-                    if (
-                        pillar_frames >= PILLAR_MIN_FRAMES
-                        and pillar_clear_frames >= PILLAR_CLEAR_FRAMES
-                    ):
-                        avoiding_pillar = False
-                        active_pillar = None
-                        pillar_frames = 0
-                        pillar_clear_frames = 0
-
-                        corner_detector.reset()
+                # =========================================================
+                # PRIORIDAD 2: ESPERAR LA DIRECCION
+                # =========================================================
+                elif not direction_locked:
+                    target_yaw = base_heading
+                    mode_str = "DETERMINANDO DIRECCION"
+                    corner_command = False
 
                 # =========================================================
                 # PRIORIDAD 2 Y 3: ESQUINAS Y PARED
@@ -646,7 +715,7 @@ class ImageManager:
                 # Dibujar información sobre el video
                 walls_dbg = corner_detector.draw(
                     walls_dbg,
-                    current_dir,
+                    processing_direction,
                     info,
                 )
 
@@ -656,6 +725,7 @@ class ImageManager:
                     mode_str=mode_str,
                     extra_lines=[
                         f"Pilar: {pillars_color or 'Ninguno'}",
+                        f"Fase: {avoidance_phase}",
                         (
                             f"Yaw {current_yaw:.0f} "
                             f"-> {target_yaw:.0f}"
