@@ -457,7 +457,7 @@ class ImageManager:
                     self.process_elements(
                         frame,
                         ["Red", "Green"],
-                        500,
+                        300,
                         VisionUtils.select_target_pillar,
                     )
                 )
