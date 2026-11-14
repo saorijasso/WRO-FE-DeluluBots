@@ -1181,9 +1181,54 @@ VisionUtils
 
 ### 4.2. Vehicle Control
 
+### 4.2. Vehicle Control
+
+#### Control strategy
+
+The Raspberry Pi 5 does not command motors directly. It sends an absolute
+**target heading** to the ESP32 over UART, and the ESP32 reports the current
+yaw from the BNO055 IMU. Every frame the Pi decides *which heading to hold*;
+the ESP32 closes the loop.
+
+#### Wall following and corners
+
+The robot holds a cardinal base heading (0°, 90°, 180°, 270°). A proportional
+controller (gain 0.05) adds a correction of at most ±12° based on the
+position of the inner wall in the wall mask.
+
+Corners are detected with a region of interest (ROI) in front of the robot.
+The corner event fires when the ROI fills with wall (≥ 55%) for 3 consecutive
+frames, after the ROI was seen empty (hysteresis) and outside a 2 s cooldown.
+The base heading then changes by ±90° and the robot commits to it until the
+heading error is below 12° (or 3 s pass).
+
+#### Direction detection
+
+- **Open Challenge:** the first line color seen sets the direction
+  (blue → counter-clockwise, orange → clockwise).
+- **Obstacle Challenge:** during the first 60 frames the robot votes for the
+  side with more free space in the track mask, then locks the direction.
+
 #### Obstacle challenge logic
+
+┌───────────────┐  pillar seen  ┌──────────────┐ 6 frames ┌──────────────┐
+│ FOLLOW WALLS  │ ────────────> │ PILLAR_STEER │ ───────> │ PILLAR_PASS  │
+└───────▲───────┘               │ ±18° offset  │          │ ±12° offset  │
+        │                       └──────────────┘          └──────┬───────┘
+        │       10 frames       ┌──────────────┐  pillar gone     │
+        └────────────────────── │PILLAR_RECOVER│ <── 8 frames ────┘
+                                │ base heading │
+                                └──────────────┘
+
+Red pillars are passed on the right (+), green on the left (−). While
+avoiding, wall following and corner detection are paused.
+
 #### Lap counting
-#### Parking procedure
+
+A state machine counts a corner when the two line colors are seen in the
+expected order (blue → orange for counter-clockwise, orange → blue for
+clockwise). Four corners make a lap; the run ends after three laps. A 6 s
+debounce prevents counting the same corner twice.
 
 ## 5. DIY Game Field
 
