@@ -1211,6 +1211,7 @@ heading error is below 12° (or 3 s pass).
 
 #### Obstacle challenge logic
 
+```text
 ┌───────────────┐  pillar seen  ┌──────────────┐ 6 frames ┌──────────────┐
 │ FOLLOW WALLS  │ ────────────> │ PILLAR_STEER │ ───────> │ PILLAR_PASS  │
 └───────▲───────┘               │ ±18° offset  │          │ ±12° offset  │
@@ -1219,6 +1220,7 @@ heading error is below 12° (or 3 s pass).
         └────────────────────── │PILLAR_RECOVER│ <── 8 frames ────┘
                                 │ base heading │
                                 └──────────────┘
+```
 
 Red pillars are passed on the right (+), green on the left (−). While
 avoiding, wall following and corner detection are paused.
